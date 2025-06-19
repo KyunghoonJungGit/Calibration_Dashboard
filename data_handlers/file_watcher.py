@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Set, Optional
 from watchdog.events import FileSystemEventHandler
 
-from .data_loader import ExperimentDataLoader
+from .tof_data_loader import ExperimentDataLoader
 
 
 class ExperimentDataWatcher(FileSystemEventHandler):
