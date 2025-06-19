@@ -1,0 +1,32 @@
+{
+  "experiment_id": "time_of_flight_20250619_171651",
+  "experiment_type": "time_of_flight",
+  "timestamp": "20250619_171651",
+  "timestamp_full": "2025-06-19T17:16:51.057951",
+  "data_files": {
+    "ds_raw": "ds_raw.nc",
+    "ds_fit": "ds_fit.nc",
+    "qubit_info": "qubit_info.json"
+  },
+  "dataset_info": {
+    "dimensions": {
+      "qubit": 14,
+      "readout_time": 1000
+    },
+    "coordinates": [
+      "qubit",
+      "readout_time"
+    ],
+    "data_vars": [
+      "adcI",
+      "adcQ",
+      "adc_single_runI",
+      "adc_single_runQ",
+      "IQ_abs",
+      "filtered_adc",
+      "threshold",
+      "delay"
+    ],
+    "qubit_count": 14
+  }
+}
