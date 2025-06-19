@@ -18,7 +18,7 @@ import dash_bootstrap_components as dbc
 
 # 로컬 모듈 임포트
 from data_handlers.file_watcher import ExperimentDataWatcher
-from HI_16Jun2025.calibration_dashboard.data_handlers.tof_data_loader import ExperimentDataLoader
+from data_handlers.data_loader import ExperimentDataLoader
 from utils.layout_components import LayoutComponents
 from watchdog.observers import Observer
 
@@ -53,8 +53,14 @@ class DashboardServer:
             self.plotters[tof_plotter.experiment_type] = tof_plotter
             print(f"✓ Registered plotter: {tof_plotter.experiment_type}")
             
+            # Resonator Spec 플로터 등록
+            from experiment_plotters.resonator_spec_plotter import ResonatorSpecPlotter
+            res_spec_plotter = ResonatorSpecPlotter()
+            self.plotters[res_spec_plotter.experiment_type] = res_spec_plotter
+            print(f"✓ Registered plotter: {res_spec_plotter.experiment_type}")
+            
             # 추후 다른 플로터들 추가
-            # from experiment_plotters.spectroscopy_plotter import SpectroscopyPlotter
+            # from experiment_plotters.qubit_spec_plotter import QubitSpecPlotter
             # from experiment_plotters.rabi_plotter import RabiPlotter
             # from experiment_plotters.ramsey_plotter import RamseyPlotter
             
@@ -429,6 +435,37 @@ class DashboardServer:
             print(f"[DEBUG] Updated TOF options: {current_options['time_of_flight']}")
             return current_options
         
+        # 6-1. Resonator Spec 특화 옵션 업데이트 콜백
+        @self.app.callback(
+            Output('current-plot-options', 'data', allow_duplicate=True),
+            [Input({'type': 'res-spec-option', 'index': ALL}, 'value')],
+            [State('current-experiment-data', 'data'),
+             State('current-plot-options', 'data')],
+            prevent_initial_call=True
+        )
+        def update_res_spec_options(option_values, current_data, current_options):
+            """Resonator Spec 플롯 옵션 업데이트"""
+            if not current_data or current_data.get('type') != 'resonator_spectroscopy':
+                return current_options or {}
+            
+            if current_options is None:
+                current_options = {}
+            
+            # 빈 값들이 들어올 수 있으므로 방어적으로 처리
+            if not option_values or len(option_values) < 4:
+                return current_options
+            
+            # Resonator Spec 옵션 업데이트
+            current_options['resonator_spectroscopy'] = {
+                'plot_type': option_values[0] if option_values[0] else 'amplitude',
+                'show_options': option_values[1] if option_values[1] else [],
+                'max_cols': option_values[2] if option_values[2] else '2',
+                'subplot_height': option_values[3] if option_values[3] else 350
+            }
+            
+            print(f"[DEBUG] Updated Resonator Spec options: {current_options['resonator_spectroscopy']}")
+            return current_options
+        
         # 7. 메인 플롯 업데이트
         @self.app.callback(
             Output('main-plot', 'figure'),
@@ -487,7 +524,10 @@ class DashboardServer:
             'qubit_spectroscopy': '🎯',
             'ramsey': '🌊',
             'rabi_amplitude': '📈',
-            'rabi_power': '⚡'
+            'rabi_power': '⚡',
+            't1': '⏳',
+            't2': '⏰',
+            't2_echo': '🔄'
         }
         return icons.get(exp_type, '📊')
     
