@@ -9,7 +9,6 @@ import xarray as xr
 from pathlib import Path
 from datetime import datetime
 from typing import List, Any, Dict, Optional
-import numpy as np
 
 
 def save_resonator_spec_experiment_for_dashboard(
@@ -79,15 +78,7 @@ def save_resonator_spec_experiment_for_dashboard(
         json.dump(qubit_info, f, indent=2)
     print(f"✓ Saved qubit info: {qubit_info_path}")
     
-    # 3. 실험 특화 분석 정보 저장
-    analysis_results = _extract_resonator_spec_analysis(ds_raw, ds_fit, qubits)
-    analysis_path = save_dir / "analysis_results.json"
-    
-    with open(analysis_path, 'w') as f:
-        json.dump(analysis_results, f, indent=2)
-    print(f"✓ Saved analysis results: {analysis_path}")
-    
-    # 4. 메타데이터 저장
+    # 3. 메타데이터 저장
     metadata = {
         "experiment_id": experiment_id,
         "experiment_type": experiment_type,
@@ -96,8 +87,7 @@ def save_resonator_spec_experiment_for_dashboard(
         "data_files": {
             "ds_raw": "ds_raw.nc",
             "ds_fit": "ds_fit.nc",
-            "qubit_info": "qubit_info.json",
-            "analysis_results": "analysis_results.json"
+            "qubit_info": "qubit_info.json"
         },
         "dataset_info": {
             "dimensions": dict(ds_raw.dims),
@@ -123,14 +113,14 @@ def save_resonator_spec_experiment_for_dashboard(
         json.dump(metadata, f, indent=2)
     print(f"✓ Saved metadata: {metadata_path}")
     
-    # 5. 실험 설정 정보 저장 (선택적)
+    # 4. 실험 설정 정보 저장 (선택적)
     if additional_info:
         config_path = save_dir / "experiment_config.json"
         with open(config_path, 'w') as f:
             json.dump(additional_info, f, indent=2)
         print(f"✓ Saved experiment config: {config_path}")
     
-    # 6. 완료 플래그 생성
+    # 5. 완료 플래그 생성
     complete_flag = save_dir / ".complete"
     complete_flag.touch()
     
@@ -251,98 +241,6 @@ def _extract_qubit_info_for_resonator_spec(qubits: List[Any], ds_raw: xr.Dataset
     }
 
 
-def _extract_resonator_spec_analysis(ds_raw: xr.Dataset, ds_fit: xr.Dataset, qubits: List[Any]) -> Dict:
-    """
-    Resonator Spectroscopy 분석 결과 추출
-    각 큐빗별 공진 주파수, Q factor 등의 핵심 정보를 저장
-    """
-    
-    analysis_results = {
-        "summary": {},
-        "per_qubit": {}
-    }
-    
-    # 전체 요약 정보
-    analysis_results["summary"] = {
-        "total_qubits": len(qubits),
-        "frequency_span_Hz": float(ds_raw.full_freq.max().values - ds_raw.full_freq.min().values),
-        "frequency_points": len(ds_raw.full_freq),
-        "measurement_type": "resonator_spectroscopy"
-    }
-    
-    # 각 큐빗별 분석 결과
-    for idx, q in enumerate(qubits):
-        grid_loc = q.grid_location if hasattr(q, 'grid_location') else f"0,{idx}"
-        qubit_name = str(ds_raw.qubit.values[idx]) if idx < len(ds_raw.qubit) else f"q{idx}"
-        
-        # 피팅 결과 추출
-        qubit_fit = ds_fit.isel(qubit=idx)
-        
-        # 공진 주파수 계산 (position은 detuning 기준)
-        if 'position' in qubit_fit.data_vars:
-            detuning_at_resonance = float(qubit_fit.position.values)
-            # 중심 주파수 찾기
-            center_freq_idx = len(ds_raw.full_freq) // 2
-            center_freq = float(ds_raw.full_freq.isel(frequency=center_freq_idx).values)
-            resonance_freq = center_freq + detuning_at_resonance
-        else:
-            resonance_freq = None
-            detuning_at_resonance = None
-        
-        # Q factor 계산 (간단한 추정)
-        if 'width' in qubit_fit.data_vars and resonance_freq:
-            width_hz = float(qubit_fit.width.values)
-            q_factor = resonance_freq / width_hz if width_hz > 0 else None
-        else:
-            q_factor = None
-            width_hz = None
-        
-        # 진폭 정보
-        if 'amplitude' in qubit_fit.data_vars:
-            amplitude = float(qubit_fit.amplitude.values)
-        else:
-            amplitude = None
-        
-        # 베이스라인
-        if 'base_line' in qubit_fit.data_vars:
-            base_line = float(qubit_fit.base_line.mean().values)
-        else:
-            base_line = None
-        
-        analysis_results["per_qubit"][grid_loc] = {
-            "qubit_name": qubit_name,
-            "grid_location": grid_loc,
-            "resonance_frequency_Hz": resonance_freq,
-            "detuning_at_resonance_Hz": detuning_at_resonance,
-            "width_Hz": width_hz,
-            "q_factor": q_factor,
-            "amplitude": amplitude,
-            "base_line": base_line,
-            "fit_quality": {
-                "has_valid_fit": all(v is not None for v in [resonance_freq, width_hz, amplitude]),
-                "resonance_in_range": (
-                    float(ds_raw.full_freq.min().values) < resonance_freq < float(ds_raw.full_freq.max().values)
-                ) if resonance_freq else False
-            }
-        }
-    
-    # 통계 정보 추가
-    valid_q_factors = [
-        res["q_factor"] for res in analysis_results["per_qubit"].values() 
-        if res["q_factor"] is not None
-    ]
-    
-    if valid_q_factors:
-        analysis_results["summary"]["q_factor_stats"] = {
-            "mean": float(np.mean(valid_q_factors)),
-            "std": float(np.std(valid_q_factors)),
-            "min": float(np.min(valid_q_factors)),
-            "max": float(np.max(valid_q_factors))
-        }
-    
-    return analysis_results
-
-
 # 실험 스크립트에서 사용할 수 있는 wrapper 함수
 def save_resonator_spec_to_dashboard(node, base_dir: Optional[str] = None):
     """
@@ -356,7 +254,7 @@ def save_resonator_spec_to_dashboard(node, base_dir: Optional[str] = None):
         
         # Save for dashboard
         if node.parameters.get('save_for_dashboard', True):
-            from resonator_spec_data_saver import save_resonator_spec_to_dashboard
+            from res_spec_data_saver import save_resonator_spec_to_dashboard
             save_resonator_spec_to_dashboard(node)
     ```
     """

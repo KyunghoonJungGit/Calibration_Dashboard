@@ -1,18 +1,23 @@
 """
-Data Loader Module
-Time of Flight 실험 데이터 파일을 로드하고 검증하는 모듈
+Resonator Spectroscopy Data Loader Module
+Load and validate Resonator Spectroscopy experiment data for Plotly Dash dashboard
+공진기 분광 실험 데이터를 로드하고 검증하는 모듈
 """
+
 import json
 import xarray as xr
 from pathlib import Path
-from typing import Dict, Optional, Any, List
+from typing import Dict, Optional, List, Tuple
 from datetime import datetime
+import numpy as np
 
-class ExperimentDataLoader:
-    """실험 데이터 로드 및 검증 클래스"""
+
+class ResonatorSpecDataLoader:
+    """Resonator Spectroscopy 실험 데이터 로드 및 검증 클래스"""
     
     def __init__(self):
         """데이터 로더 초기화"""
+        
         # 필수 파일 목록
         self.required_files = {
             'metadata': 'metadata.json',
@@ -23,26 +28,22 @@ class ExperimentDataLoader:
         
         # 선택적 파일 목록
         self.optional_files = {
-            'analysis_results': 'analysis_results.json',
             'experiment_config': 'experiment_config.json',
             'notes': 'notes.txt'
         }
         
-        # 지원하는 실험 타입
-        self.supported_experiments = {
-            'time_of_flight',
-            'resonator_spectroscopy',
-            'qubit_spectroscopy',
-            'ramsey',
-            'rabi_amplitude',
-            'rabi_power',
-            't1',
-            't2',
-            't2_echo'
+        # Resonator Spectroscopy 필수 데이터 변수
+        self.required_data_vars = {
+            'ds_raw': ['phase', 'IQ_abs'],
+            'ds_fit': ['amplitude', 'position', 'width', 'base_line']
         }
+        
+        # 필수 좌표
+        self.required_coords = ['full_freq', 'detuning', 'qubit']
     
     def load_experiment(self, experiment_dir: Path) -> Optional[Dict]:
-        """실험 폴더에서 데이터 로드
+        """
+        Resonator Spectroscopy 실험 데이터 로드
         
         Parameters
         ----------
@@ -59,6 +60,8 @@ class ExperimentDataLoader:
             if not experiment_dir.is_dir():
                 raise ValueError(f"Not a directory: {experiment_dir}")
             
+            print(f"\n=== Loading Resonator Spectroscopy data from {experiment_dir.name} ===")
+            
             # 필수 파일 확인
             self._validate_required_files(experiment_dir)
             
@@ -67,12 +70,18 @@ class ExperimentDataLoader:
             
             # 실험 타입 검증
             exp_type = metadata.get('experiment_type')
-            if exp_type not in self.supported_experiments:
-                print(f"⚠️  Warning: Unknown experiment type '{exp_type}'")
+            if exp_type != 'resonator_spectroscopy':
+                print(f"⚠️  Warning: Expected 'resonator_spectroscopy' but got '{exp_type}'")
             
             # xarray 데이터셋 로드
-            ds_raw = self._load_dataset(experiment_dir / self.required_files['ds_raw'])
-            ds_fit = self._load_dataset(experiment_dir / self.required_files['ds_fit'])
+            ds_raw = self._load_and_validate_dataset(
+                experiment_dir / self.required_files['ds_raw'], 
+                'ds_raw'
+            )
+            ds_fit = self._load_and_validate_dataset(
+                experiment_dir / self.required_files['ds_fit'], 
+                'ds_fit'
+            )
             
             # Qubit 정보 로드
             qubit_info = self._load_json(experiment_dir / self.required_files['qubit_info'])
@@ -83,21 +92,27 @@ class ExperimentDataLoader:
             # 데이터 통합
             experiment_data = {
                 'type': exp_type,
+                'experiment_id': metadata.get('experiment_id'),
                 'timestamp': metadata.get('timestamp_full', metadata.get('timestamp')),
                 'ds_raw': ds_raw,
                 'ds_fit': ds_fit,
                 'qubit_info': qubit_info,
                 'metadata': metadata,
-                **optional_data  # 선택적 데이터 추가
+                **optional_data
             }
             
-            # 데이터 검증
-            self._validate_experiment_data(experiment_data)
+            # 데이터 일관성 검증
+            self._validate_data_consistency(experiment_data)
+            
+            print(f"✓ Successfully loaded Resonator Spectroscopy data")
+            print(f"  - {len(qubit_info['grid_locations'])} qubits")
+            print(f"  - {len(ds_raw.full_freq)} frequency points")
+            print(f"  - Frequency range: {ds_raw.full_freq.min().values/1e9:.3f} - {ds_raw.full_freq.max().values/1e9:.3f} GHz")
             
             return experiment_data
             
         except Exception as e:
-            print(f"Error loading experiment from {experiment_dir}: {e}")
+            print(f"❌ Error loading experiment from {experiment_dir}: {e}")
             return None
     
     def _validate_required_files(self, experiment_dir: Path):
@@ -111,7 +126,7 @@ class ExperimentDataLoader:
         
         if missing_files:
             raise FileNotFoundError(
-                f"Missing required files in {experiment_dir.name}: {', '.join(missing_files)}"
+                f"Missing required files: {', '.join(missing_files)}"
             )
     
     def _load_metadata(self, experiment_dir: Path) -> Dict:
@@ -126,27 +141,35 @@ class ExperimentDataLoader:
         if missing_fields:
             raise ValueError(f"Missing required metadata fields: {', '.join(missing_fields)}")
         
-        # 타임스탬프 파싱 (필요시)
-        if 'timestamp_full' not in metadata and 'timestamp' in metadata:
-            try:
-                # 타임스탬프 형식 추정 및 파싱
-                timestamp_str = metadata['timestamp']
-                if len(timestamp_str) == 15:  # YYYYMMDD_HHMMSS 형식
-                    dt = datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S")
-                    metadata['timestamp_full'] = dt.isoformat()
-            except:
-                pass
-        
         return metadata
     
-    def _load_dataset(self, file_path: Path) -> xr.Dataset:
-        """xarray 데이터셋 로드"""
+    def _load_and_validate_dataset(self, file_path: Path, dataset_type: str) -> xr.Dataset:
+        """xarray 데이터셋 로드 및 검증"""
         try:
             ds = xr.open_dataset(file_path)
             
-            # 데이터셋 기본 검증
+            # 기본 검증
             if len(ds.data_vars) == 0:
                 raise ValueError(f"Empty dataset: {file_path.name}")
+            
+            # Resonator Spectroscopy 특화 검증
+            if dataset_type == 'ds_raw':
+                # 필수 좌표 확인
+                missing_coords = [c for c in self.required_coords if c not in ds.coords]
+                if missing_coords:
+                    raise ValueError(f"Missing coordinates in {file_path.name}: {missing_coords}")
+                
+                # 필수 데이터 변수 확인
+                missing_vars = [v for v in self.required_data_vars['ds_raw'] if v not in ds.data_vars]
+                if missing_vars:
+                    print(f"⚠️  Warning: Missing data variables in {file_path.name}: {missing_vars}")
+            
+            elif dataset_type == 'ds_fit':
+                # 피팅 파라미터 확인
+                expected_vars = self.required_data_vars['ds_fit']
+                present_vars = [v for v in expected_vars if v in ds.data_vars]
+                if len(present_vars) < 3:  # 최소 3개 이상의 피팅 파라미터 필요
+                    print(f"⚠️  Warning: Only {len(present_vars)} fit parameters found")
             
             return ds
             
@@ -177,103 +200,220 @@ class ExperimentDataLoader:
                     elif filename.endswith('.txt'):
                         with open(file_path, 'r') as f:
                             optional_data[file_type] = f.read()
-                    print(f"   📄 Loaded optional: {filename}")
+                    print(f"  📄 Loaded optional: {filename}")
                 except Exception as e:
-                    print(f"   ⚠️  Failed to load optional {filename}: {e}")
+                    print(f"  ⚠️  Failed to load optional {filename}: {e}")
         
         return optional_data
     
-    def _validate_experiment_data(self, experiment_data: Dict):
-        """로드된 실험 데이터 검증"""
-        # 데이터셋 차원 일치 확인
+    def _validate_data_consistency(self, experiment_data: Dict):
+        """데이터 일관성 검증"""
         ds_raw = experiment_data['ds_raw']
         ds_fit = experiment_data['ds_fit']
         qubit_info = experiment_data['qubit_info']
         
-        # Qubit 차원 확인
-        if 'qubit' in ds_raw.dims:
-            n_qubits_raw = len(ds_raw.qubit)
-            n_qubits_info = len(qubit_info.get('grid_locations', []))
-            
-            if n_qubits_raw != n_qubits_info:
-                print(f"⚠️  Warning: Qubit count mismatch - "
-                      f"Dataset: {n_qubits_raw}, Info: {n_qubits_info}")
+        # Qubit 수 일치 확인
+        n_qubits_raw = len(ds_raw.qubit)
+        n_qubits_fit = len(ds_fit.qubit)
+        n_qubits_info = len(qubit_info.get('grid_locations', []))
         
-        # 실험 타입별 추가 검증
-        exp_type = experiment_data['type']
-        self._validate_experiment_specific(exp_type, experiment_data)
+        if not (n_qubits_raw == n_qubits_fit == n_qubits_info):
+            print(f"⚠️  Warning: Qubit count mismatch - "
+                  f"Raw: {n_qubits_raw}, Fit: {n_qubits_fit}, Info: {n_qubits_info}")
+        
+        # 주파수 범위 검증
+        freq_info = experiment_data['metadata'].get('dataset_info', {}).get('frequency_range', {})
+        if freq_info:
+            actual_min = float(ds_raw.full_freq.min().values)
+            actual_max = float(ds_raw.full_freq.max().values)
+            
+            if abs(actual_min - freq_info.get('full_freq_min', actual_min)) > 1e3:  # 1kHz tolerance
+                print("⚠️  Warning: Frequency range mismatch in metadata")
     
-    def _validate_experiment_specific(self, exp_type: str, experiment_data: Dict):
-        """실험 타입별 특수 검증"""
+    def get_plot_ready_data(self, experiment_data: Dict) -> Dict:
+        """
+        플로팅을 위한 데이터 준비
+        
+        Returns
+        -------
+        Dict
+            Plotly Dash에서 바로 사용할 수 있는 형태의 데이터
+        """
         ds_raw = experiment_data['ds_raw']
         ds_fit = experiment_data['ds_fit']
-        
-        if exp_type == 'time_of_flight':
-            # TOF 실험 검증
-            required_vars = ['adcI', 'adcQ']
-            missing_vars = [v for v in required_vars if v not in ds_raw.data_vars]
-            if missing_vars:
-                print(f"⚠️  Warning: Missing expected variables for TOF: {missing_vars}")
-            
-            # Fit 파라미터 확인
-            if 'delay' not in ds_fit.data_vars:
-                print("⚠️  Warning: 'delay' not found in fit results")
-        
-        elif exp_type == 'resonator_spectroscopy':
-            # 공진기 분광 검증
-            if 'frequency' not in ds_raw.coords:
-                print("⚠️  Warning: 'frequency' coordinate not found")
-        
-        elif exp_type in ['ramsey', 'rabi_power']:
-            # 2D 실험 검증
-            if len(ds_raw.dims) < 2:
-                print(f"⚠️  Warning: Expected 2D data for {exp_type}")
-        
-        # 추가 실험 타입별 검증 로직...
-    
-    def get_experiment_summary(self, experiment_data: Dict) -> Dict:
-        """실험 데이터 요약 정보 생성"""
-        metadata = experiment_data['metadata']
-        ds_raw = experiment_data['ds_raw']
         qubit_info = experiment_data['qubit_info']
         
-        summary = {
-            'experiment_id': metadata['experiment_id'],
-            'experiment_type': metadata['experiment_type'],
-            'timestamp': metadata.get('timestamp_full', metadata['timestamp']),
-            'n_qubits': len(qubit_info.get('grid_locations', [])),
-            'data_shape': dict(ds_raw.dims),
-            'data_vars': list(ds_raw.data_vars),
-            'coordinates': list(ds_raw.coords),
-            'optional_data': list(k for k in experiment_data.keys() 
-                               if k not in ['type', 'timestamp', 'ds_raw', 
-                                          'ds_fit', 'qubit_info', 'metadata'])
+        plot_data = {
+            'qubits': [],
+            'frequency_axis': {
+                'full_freq_GHz': (ds_raw.full_freq / 1e9).values.tolist(),
+                'detuning_MHz': (ds_raw.detuning / 1e6).values.tolist()
+            }
         }
         
-        return summary
-    
-    def save_experiment_summary(self, experiment_dir: Path, summary: Dict):
-        """실험 요약 정보 저장 (캐싱용)"""
-        summary_path = experiment_dir / 'summary.json'
-        try:
-            with open(summary_path, 'w') as f:
-                json.dump(summary, f, indent=2)
-            print(f"   💾 Saved experiment summary")
-        except Exception as e:
-            print(f"   ⚠️  Failed to save summary: {e}")
-    
-    @staticmethod
-    def validate_dataset_compatibility(ds1: xr.Dataset, ds2: xr.Dataset) -> bool:
-        """두 데이터셋의 호환성 확인 (비교 분석용)"""
-        # 차원 확인
-        if ds1.dims.keys() != ds2.dims.keys():
-            return False
+        # 각 큐빗별 데이터 준비
+        for idx, grid_loc in enumerate(qubit_info['grid_locations']):
+            qubit_name = qubit_info['qubit_names'][idx]
+            
+            # Raw 데이터
+            raw_data = {
+                'grid_location': grid_loc,
+                'qubit_name': qubit_name,
+                'phase': ds_raw.phase.isel(qubit=idx).values.tolist(),
+                'IQ_abs': (ds_raw.IQ_abs.isel(qubit=idx) / 1e-3).values.tolist(),  # mV 단위
+            }
+            
+            # Fit 데이터
+            if all(var in ds_fit.data_vars for var in ['amplitude', 'position', 'width', 'base_line']):
+                fit_params = ds_fit.isel(qubit=idx)
+                
+                # Lorentzian dip 함수로 피팅 곡선 생성
+                fitted_curve = self._compute_lorentzian_dip(
+                    ds_raw.detuning.values,
+                    float(fit_params.amplitude.values),
+                    float(fit_params.position.values),
+                    float(fit_params.width.values) / 2,
+                    float(fit_params.base_line.mean().values)
+                )
+                
+                raw_data['fit'] = {
+                    'curve': (fitted_curve / 1e-3).tolist(),  # mV 단위
+                    'amplitude': float(fit_params.amplitude.values),
+                    'position': float(fit_params.position.values),
+                    'width': float(fit_params.width.values),
+                    'base_line': float(fit_params.base_line.mean().values)
+                }
+            
+            plot_data['qubits'].append(raw_data)
         
-        # 좌표 확인
-        for coord in ds1.coords:
-            if coord not in ds2.coords:
-                return False
-            if not ds1[coord].equals(ds2[coord]):
-                return False
+        # 그리드 정보 추가
+        plot_data['grid_info'] = qubit_info.get('grid_shape', {})
         
-        return True
+        return plot_data
+    
+    def _compute_lorentzian_dip(self, x, amplitude, position, hwhm, base_line):
+        """Lorentzian dip 함수 계산"""
+        return base_line - amplitude / (1 + ((x - position) / hwhm) ** 2)
+    
+    def load_multiple_experiments(self, base_dir: Path, 
+                                 experiment_type: str = "resonator_spectroscopy",
+                                 limit: Optional[int] = None) -> List[Dict]:
+        """
+        여러 실험 데이터를 한번에 로드
+        
+        Parameters
+        ----------
+        base_dir : Path
+            실험 데이터들이 있는 기본 디렉토리
+        experiment_type : str
+            로드할 실험 타입
+        limit : int, optional
+            로드할 최대 실험 수
+            
+        Returns
+        -------
+        List[Dict]
+            로드된 실험 데이터 리스트
+        """
+        experiments = []
+        
+        # 실험 디렉토리 찾기
+        exp_dirs = [d for d in base_dir.iterdir() 
+                   if d.is_dir() and d.name.startswith(experiment_type)]
+        
+        # 시간순 정렬 (최신 순)
+        exp_dirs.sort(reverse=True)
+        
+        # 제한이 있으면 적용
+        if limit:
+            exp_dirs = exp_dirs[:limit]
+        
+        print(f"\nFound {len(exp_dirs)} {experiment_type} experiments")
+        
+        for exp_dir in exp_dirs:
+            exp_data = self.load_experiment(exp_dir)
+            if exp_data:
+                experiments.append(exp_data)
+        
+        print(f"\nSuccessfully loaded {len(experiments)} experiments")
+        
+        return experiments
+    
+    def compare_experiments(self, exp1: Dict, exp2: Dict) -> Dict:
+        """
+        두 실험 데이터 비교
+        
+        Returns
+        -------
+        Dict
+            비교 결과
+        """
+        comparison = {
+            'compatible': True,
+            'differences': []
+        }
+        
+        # 주파수 범위 비교
+        freq1_min = float(exp1['ds_raw'].full_freq.min().values)
+        freq1_max = float(exp1['ds_raw'].full_freq.max().values)
+        freq2_min = float(exp2['ds_raw'].full_freq.min().values)
+        freq2_max = float(exp2['ds_raw'].full_freq.max().values)
+        
+        if abs(freq1_min - freq2_min) > 1e6 or abs(freq1_max - freq2_max) > 1e6:  # 1MHz tolerance
+            comparison['differences'].append('frequency_range')
+            comparison['compatible'] = False
+        
+        # 큐빗 수 비교
+        if len(exp1['ds_raw'].qubit) != len(exp2['ds_raw'].qubit):
+            comparison['differences'].append('qubit_count')
+            comparison['compatible'] = False
+        
+        # 그리드 위치 비교
+        grid1 = set(exp1['qubit_info']['grid_locations'])
+        grid2 = set(exp2['qubit_info']['grid_locations'])
+        
+        if grid1 != grid2:
+            comparison['differences'].append('grid_locations')
+            comparison['grid_diff'] = {
+                'only_in_exp1': list(grid1 - grid2),
+                'only_in_exp2': list(grid2 - grid1)
+            }
+        
+        return comparison
+
+
+# 사용 예시 함수들
+def load_latest_resonator_spec(base_dir: str = "D:/Codes/Career/Kyunghoon/Playground/HI_16Jun2025/calibration_dashboard/dashboard_data") -> Optional[Dict]:
+    """최신 Resonator Spectroscopy 실험 데이터 로드"""
+    loader = ResonatorSpecDataLoader()
+    base_path = Path(base_dir)
+    
+    # 최신 실험 찾기
+    exp_dirs = [d for d in base_path.iterdir() 
+               if d.is_dir() and d.name.startswith("resonator_spectroscopy")]
+    
+    if not exp_dirs:
+        print("No resonator spectroscopy experiments found")
+        return None
+    
+    # 최신 실험 로드
+    latest_dir = max(exp_dirs, key=lambda d: d.stat().st_mtime)
+    return loader.load_experiment(latest_dir)
+
+
+def load_and_prepare_for_plotting(experiment_dir: Path) -> Optional[Dict]:
+    """플로팅을 위한 데이터 로드 및 준비"""
+    loader = ResonatorSpecDataLoader()
+    
+    # 실험 로드
+    exp_data = loader.load_experiment(experiment_dir)
+    if not exp_data:
+        return None
+    
+    # 플롯 데이터 준비
+    plot_data = loader.get_plot_ready_data(exp_data)
+    
+    return {
+        'experiment': exp_data,
+        'plot_data': plot_data
+    }
