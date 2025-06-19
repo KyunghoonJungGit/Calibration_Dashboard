@@ -18,7 +18,7 @@ import dash_bootstrap_components as dbc
 
 # 로컬 모듈 임포트
 from data_handlers.file_watcher import ExperimentDataWatcher
-from data_handlers.data_loader import ExperimentDataLoader
+from data_handlers.tof_data_loader import ExperimentDataLoader
 from utils.layout_components import LayoutComponents
 from watchdog.observers import Observer
 
