@@ -3,6 +3,7 @@
 Calibration Dashboard Server - Main Server Module
 실험 데이터 시각화를 위한 메인 대시보드 서버
 """
+
 import os
 import sys
 import threading
@@ -18,8 +19,9 @@ import dash_bootstrap_components as dbc
 
 # 로컬 모듈 임포트
 from data_handlers.file_watcher import ExperimentDataWatcher
-from data_handlers.tof_data_loader import ExperimentDataLoader
+from data_handlers.universal_data_loader import UniversalDataLoader
 from utils.layout_components import LayoutComponents
+
 from watchdog.observers import Observer
 
 
@@ -35,7 +37,7 @@ class DashboardServer:
         
         # 컴포넌트 초기화
         self.layout_components = LayoutComponents()
-        self.data_loader = ExperimentDataLoader()
+        self.data_loader = UniversalDataLoader()  # 범용 로더 사용
         
         # 플로터 레지스트리 (동적 로딩)
         self.plotters = {}
@@ -622,7 +624,7 @@ class DashboardServer:
         
         for exp_dir in experiment_dirs:
             try:
-                # 데이터 로더 사용
+                # 범용 데이터 로더 사용
                 experiment_data = self.data_loader.load_experiment(exp_dir)
                 
                 if experiment_data:
@@ -639,6 +641,11 @@ class DashboardServer:
         print(f"✅ Successfully loaded: {loaded_count}")
         if failed_count > 0:
             print(f"❌ Failed to load: {failed_count}")
+        
+        # 지원하는 실험 타입 출력
+        print(f"\n📋 Supported experiment types:")
+        for exp_type in self.data_loader.get_supported_experiments():
+            print(f"   • {exp_type}")
     
     def run(self, watch_dir: str = "./dashboard_data"):
         """대시보드 서버 실행"""
@@ -651,8 +658,8 @@ class DashboardServer:
         # 기존 실험 스캔
         self.scan_existing_experiments(watch_path)
         
-        # 파일 감시 시작
-        event_handler = ExperimentDataWatcher(self)
+        # 파일 감시 시작 - 범용 로더를 전달
+        event_handler = ExperimentDataWatcher(self, self.data_loader)
         observer = Observer()
         observer.schedule(event_handler, str(watch_path), recursive=True)
         observer.start()

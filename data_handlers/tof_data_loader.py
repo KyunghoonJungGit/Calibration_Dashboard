@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, Optional, Any, List
 from datetime import datetime
 
-class ExperimentDataLoader:
+class TOFDataLoader:
     """실험 데이터 로드 및 검증 클래스"""
     
     def __init__(self):

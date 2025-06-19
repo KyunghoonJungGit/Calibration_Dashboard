@@ -2,29 +2,29 @@
 File Watcher Module
 실험 데이터 폴더를 감시하고 새로운 실험 데이터를 감지하는 모듈
 """
+
 import time
 import threading
 from pathlib import Path
 from typing import Set, Optional
 from watchdog.events import FileSystemEventHandler
-
-from .tof_data_loader import ExperimentDataLoader
+from .universal_data_loader import UniversalDataLoader
 
 
 class ExperimentDataWatcher(FileSystemEventHandler):
     """실험 데이터 폴더를 감시하고 완료된 실험을 감지"""
     
-    def __init__(self, dashboard_server, data_loader: Optional[ExperimentDataLoader] = None):
+    def __init__(self, dashboard_server, data_loader: Optional[UniversalDataLoader] = None):
         """
         Parameters
         ----------
         dashboard_server : DashboardServer
             메인 대시보드 서버 인스턴스
-        data_loader : ExperimentDataLoader, optional
+        data_loader : UniversalDataLoader, optional
             데이터 로더 인스턴스. None인 경우 새로 생성
         """
         self.dashboard_server = dashboard_server
-        self.data_loader = data_loader or ExperimentDataLoader()
+        self.data_loader = data_loader or UniversalDataLoader()
         self.processing: Set[Path] = set()  # 현재 처리 중인 폴더
         self.processed: Set[Path] = set()   # 이미 처리된 폴더
         self.lock = threading.Lock()
@@ -102,7 +102,7 @@ class ExperimentDataWatcher(FileSystemEventHandler):
         # 파일 쓰기 완료 대기
         time.sleep(self.processing_delay)
         
-        # 데이터 로더를 통해 실험 데이터 로드
+        # 범용 데이터 로더를 통해 실험 데이터 로드
         experiment_data = self.data_loader.load_experiment(experiment_dir)
         
         if experiment_data:
