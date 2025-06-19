@@ -128,8 +128,8 @@ class DashboardServer:
             # 추가 저장소: 현재 플롯 옵션
             dcc.Store(id='current-plot-options', storage_type='memory', data={}),
             
-            # Interval 컴포넌트
-            dcc.Interval(id='check-new-experiments', interval=5000, disabled=False)
+            # Interval 컴포넌트 (더 빠른 업데이트)
+            dcc.Interval(id='check-new-experiments', interval=3600000, disabled=False)
         ], fluid=True)
     
     def _setup_callbacks(self):
@@ -192,7 +192,7 @@ class DashboardServer:
                 )
             
             # 리프레시 또는 초기 로드
-            if trigger in ['refresh-button', 'initial']:
+            if trigger in ['refresh-button', 'initial', 'new-experiments-flag']:
                 with self.lock:
                     # 실험 데이터 준비
                     experiments_data = {}
@@ -219,6 +219,10 @@ class DashboardServer:
                     if new_experiments and trigger == 'refresh-button':
                         status_msg = f"✅ Loaded {len(new_experiments)} new experiment(s)"
                         show_alert = True
+                    elif trigger == 'new-experiments-flag' and new_flag.get('has_new'):
+                        # 새 실험이 있을 때 자동으로 로드
+                        status_msg = f"✅ Auto-loaded {new_flag['count']} new experiment(s)"
+                        show_alert = True
                     
                     update_time = f"Last updated: {datetime.now().strftime('%H:%M:%S')}"
                     
@@ -235,19 +239,17 @@ class DashboardServer:
         # 3. 실험 목록 업데이트
         @self.app.callback(
             [Output('experiment-selector', 'options'),
-             Output('experiment-selector', 'value'),
-             Output('current-experiment-data', 'data')],
+             Output('experiment-selector', 'value')],
             [Input('experiments-store', 'data')],
-            [State('experiment-selector', 'value'),
-             State('current-experiment-data', 'data')]
+            [State('experiment-selector', 'value')]
         )
-        def update_experiment_list(experiments_data, current_value, current_data):
+        def update_experiment_list(experiments_data, current_value):
             """실험 목록 업데이트"""
             print(f"[DEBUG] update_experiment_list - experiments_data: {experiments_data is not None}")
             print(f"[DEBUG] self.experiment_order: {self.experiment_order}")
             
             if not experiments_data:
-                return [], None, None
+                return [], None
             
             options = []
             # self.experiment_order를 사용하여 순서 유지
@@ -266,18 +268,35 @@ class DashboardServer:
             
             # 현재 선택 유지 또는 새로운 선택
             if current_value and current_value in experiments_data:
-                return options, current_value, current_data
+                return options, current_value
             elif options:  # options가 있는지 확인
                 new_value = options[-1]['value']  # 마지막 옵션 선택
-                new_data = {
-                    'exp_id': new_value,
-                    'type': experiments_data[new_value]['type'],
-                    'timestamp': experiments_data[new_value]['timestamp']
-                }
                 print(f"[DEBUG] Selected new experiment: {new_value}")
-                return options, new_value, new_data
+                return options, new_value
             
-            return options, None, None
+            return options, None
+        
+        # 3-1. 실험 선택 시 current-experiment-data 업데이트 (새로운 콜백)
+        @self.app.callback(
+            Output('current-experiment-data', 'data'),
+            [Input('experiment-selector', 'value')],
+            [State('experiments-store', 'data')]
+        )
+        def update_current_experiment(selected_value, experiments_data):
+            """선택된 실험 데이터 업데이트"""
+            print(f"[DEBUG] update_current_experiment - selected_value: {selected_value}")
+            
+            if not selected_value or not experiments_data or selected_value not in experiments_data:
+                return None
+            
+            exp = experiments_data[selected_value]
+            current_data = {
+                'exp_id': selected_value,
+                'type': exp['type'],
+                'timestamp': exp['timestamp']
+            }
+            print(f"[DEBUG] Updated current experiment data: {current_data}")
+            return current_data
         
         # 4. 디스플레이 옵션 동적 업데이트
         @self.app.callback(
@@ -405,10 +424,9 @@ class DashboardServer:
             Output('main-plot', 'figure'),
             [Input('qubit-selector', 'value'),
              Input('current-experiment-data', 'data'),
-             Input('current-plot-options', 'data')],
-            [State('experiments-store', 'data')]
+             Input('current-plot-options', 'data')]
         )
-        def update_main_plot(selected_qubits, current_data, stored_options, experiments_store):
+        def update_main_plot(selected_qubits, current_data, stored_options):
             """메인 플롯 업데이트"""
             print(f"[DEBUG] update_main_plot - selected_qubits: {selected_qubits}, current_data: {current_data}")
             
