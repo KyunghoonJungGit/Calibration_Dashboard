@@ -121,7 +121,9 @@ class DashboardServer:
             self.layout_components.create_plot_area(),
             
             # 데이터 저장소
-            self.layout_components.create_data_stores(),
+            dcc.Store(id='current-experiment-data', storage_type='memory', data=None),
+            dcc.Store(id='experiments-store', storage_type='memory', data={}),
+            dcc.Store(id='new-experiments-flag', storage_type='memory', data={'has_new': False, 'count': 0}),
             
             # 추가 저장소: 현재 플롯 옵션
             dcc.Store(id='current-plot-options', storage_type='memory', data={}),
@@ -370,16 +372,12 @@ class DashboardServer:
         # 6. TOF 특화 옵션 업데이트 콜백들 추가
         @self.app.callback(
             Output('current-plot-options', 'data', allow_duplicate=True),
-            [Input('tof-plot-type', 'value'),
-             Input('tof-show-options', 'value'),
-             Input('tof-max-cols', 'value'),
-             Input('tof-subplot-height', 'value')],
+            [Input({'type': 'tof-option', 'index': ALL}, 'value')],
             [State('current-experiment-data', 'data'),
              State('current-plot-options', 'data')],
             prevent_initial_call=True
         )
-        def update_tof_options(plot_type, show_options, max_cols, subplot_height, 
-                             current_data, current_options):
+        def update_tof_options(option_values, current_data, current_options):
             """TOF 플롯 옵션 업데이트"""
             if not current_data or current_data.get('type') != 'time_of_flight':
                 return current_options or {}
@@ -387,12 +385,16 @@ class DashboardServer:
             if current_options is None:
                 current_options = {}
             
+            # 빈 값들이 들어올 수 있으므로 방어적으로 처리
+            if not option_values or len(option_values) < 4:
+                return current_options
+            
             # TOF 옵션 업데이트
             current_options['time_of_flight'] = {
-                'plot_type': plot_type,
-                'show_options': show_options or [],
-                'max_cols': max_cols,
-                'subplot_height': subplot_height
+                'plot_type': option_values[0] if option_values[0] else 'averaged',
+                'show_options': option_values[1] if option_values[1] else [],
+                'max_cols': option_values[2] if option_values[2] else '2',
+                'subplot_height': option_values[3] if option_values[3] else 300
             }
             
             print(f"[DEBUG] Updated TOF options: {current_options['time_of_flight']}")

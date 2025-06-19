@@ -38,48 +38,49 @@ class TOFPlotter(ExperimentPlotter):
     def get_display_options(self) -> List[Any]:
         """TOF 전용 디스플레이 옵션"""
         return [
-            # 플롯 타입 선택 - ID를 단순하게 변경
-            dbc.RadioItems(
-                id='tof-plot-type',
-                options=[
-                    {"label": "Averaged Run", "value": "averaged"},
-                    {"label": "Single Run", "value": "single"},
-                    {"label": "Both", "value": "both"}
-                ],
-                value="averaged",
-                className="mb-3"
-            ),
+            # 플롯 타입 선택
+            html.Div([
+                html.Label("Plot Type:", className="font-weight-bold mb-2"),
+                dcc.RadioItems(
+                    id={'type': 'tof-option', 'index': 0},
+                    options=[
+                        {"label": "Averaged Run", "value": "averaged"},
+                        {"label": "Single Run", "value": "single"},
+                        {"label": "Both", "value": "both"}
+                    ],
+                    value="averaged",
+                    className="mb-3",
+                    labelStyle={'display': 'block', 'margin-bottom': '5px'}
+                )
+            ]),
             
             html.Hr(),
             
             # 추가 옵션들
-            dbc.Form([
+            html.Div([
+                html.Label("Display Options:", className="font-weight-bold mb-2"),
+                dcc.Checklist(
+                    id={'type': 'tof-option', 'index': 1},
+                    options=[
+                        {"label": "Show TOF Line", "value": "show_tof"},
+                        {"label": "Show ADC Range", "value": "show_adc"},
+                        {"label": "Auto-scale Y-axis", "value": "auto_scale"}
+                    ],
+                    value=["show_tof", "show_adc", "auto_scale"],
+                    className="mb-3",
+                    labelStyle={'display': 'block', 'margin-bottom': '5px'}
+                )
+            ]),
+            
+            html.Hr(),
+            
+            # 레이아웃 옵션
+            html.Div([
                 dbc.Row([
                     dbc.Col([
-                        dbc.Label("Display Options:", className="font-weight-bold")
-                    ], width=12)
-                ]),
-                
-                dbc.Row([
-                    dbc.Col([
-                        dbc.Checklist(
-                            id='tof-show-options',
-                            options=[
-                                {"label": "Show TOF Line", "value": "show_tof"},
-                                {"label": "Show ADC Range", "value": "show_adc"},
-                                {"label": "Auto-scale Y-axis", "value": "auto_scale"}
-                            ],
-                            value=["show_tof", "show_adc", "auto_scale"],
-                            inline=False
-                        )
-                    ], width=12)
-                ], className="mb-3"),
-                
-                dbc.Row([
-                    dbc.Col([
-                        dbc.Label("Max Columns:", className="me-2"),
-                        dbc.Select(
-                            id='tof-max-cols',
+                        html.Label("Max Columns:", className="mb-2"),
+                        dcc.Dropdown(
+                            id={'type': 'tof-option', 'index': 2},
                             options=[
                                 {"label": "1", "value": "1"},
                                 {"label": "2", "value": "2"},
@@ -87,19 +88,19 @@ class TOFPlotter(ExperimentPlotter):
                                 {"label": "4", "value": "4"}
                             ],
                             value="2",
-                            style={"width": "80px"}
+                            style={"width": "100%"}
                         )
                     ], width=6),
                     dbc.Col([
-                        dbc.Label("Height per subplot:", className="me-2"),
-                        dbc.Input(
-                            id='tof-subplot-height',
+                        html.Label("Height per subplot:", className="mb-2"),
+                        dcc.Input(
+                            id={'type': 'tof-option', 'index': 3},
                             type="number",
                             value=300,
                             min=200,
                             max=600,
                             step=50,
-                            style={"width": "100px"}
+                            style={"width": "100%"}
                         )
                     ], width=6)
                 ])
