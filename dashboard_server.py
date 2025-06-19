@@ -9,6 +9,7 @@ import threading
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Any, Optional
+import json
 
 # 대시보드 관련 임포트
 from dash import Dash, dcc, html, Input, Output, State, ALL, MATCH
@@ -140,6 +141,9 @@ class DashboardServer:
         )
         def check_for_new_experiments(n_intervals, stored_experiments):
             """백그라운드에서 새 실험 확인"""
+            if stored_experiments is None:
+                stored_experiments = {}
+                
             with self.lock:
                 new_count = 0
                 for exp_id in self.experiment_order:
@@ -164,14 +168,19 @@ class DashboardServer:
             import dash
             ctx = dash.callback_context
             
+            if stored_experiments is None:
+                stored_experiments = {}
+            
+            print(f"[DEBUG] sync_experiments called - trigger: {ctx.triggered if ctx.triggered else 'initial'}")
+            
             if not ctx.triggered:
                 trigger = "initial"
             else:
                 trigger = ctx.triggered[0]['prop_id'].split('.')[0]
             
             # 새 실험 알림
-            if trigger == 'new-experiments-flag' and new_flag['has_new']:
-                current_count = len(stored_experiments) if stored_experiments else 0
+            if trigger == 'new-experiments-flag' and new_flag and new_flag.get('has_new'):
+                current_count = len(stored_experiments)
                 return (
                     dash.no_update,
                     f"🔔 {new_flag['count']} new experiment(s) available! Click Refresh to load.",
@@ -199,6 +208,8 @@ class DashboardServer:
                                 'grid_locations': exp['qubit_info']['grid_locations'],
                                 'qubit_mapping': exp['qubit_info']['qubit_mapping']
                             }
+                    
+                    print(f"[DEBUG] Prepared experiments_data: {len(experiments_data)} experiments")
                     
                     # 상태 메시지
                     status_msg = ""
@@ -230,6 +241,8 @@ class DashboardServer:
         )
         def update_experiment_list(experiments_data, current_value, current_data):
             """실험 목록 업데이트"""
+            print(f"[DEBUG] update_experiment_list - experiments_data: {experiments_data is not None}")
+            
             if not experiments_data:
                 return [], None, None
             
@@ -244,6 +257,8 @@ class DashboardServer:
                         'value': exp_id
                     })
             
+            print(f"[DEBUG] Generated {len(options)} options")
+            
             # 현재 선택 유지 또는 새로운 선택
             if current_value and current_value in experiments_data:
                 return options, current_value, current_data
@@ -254,6 +269,7 @@ class DashboardServer:
                     'type': experiments_data[new_value]['type'],
                     'timestamp': experiments_data[new_value]['timestamp']
                 }
+                print(f"[DEBUG] Selected new experiment: {new_value}")
                 return options, new_value, new_data
             
             return options, None, None
@@ -267,6 +283,8 @@ class DashboardServer:
         )
         def update_display_options(current_data, current_options):
             """실험 타입에 따라 디스플레이 옵션 업데이트"""
+            print(f"[DEBUG] update_display_options - current_data: {current_data}")
+            
             if not current_data:
                 return (
                     html.P("Select an experiment to see display options", 
@@ -284,15 +302,18 @@ class DashboardServer:
                 display_components = plotter.get_display_options()
                 
                 # 기본 옵션 설정
+                if current_options is None:
+                    current_options = {}
                 if exp_type not in current_options:
                     current_options[exp_type] = plotter.get_default_options()
                 
+                print(f"[DEBUG] Returning display options for {exp_type}")
                 return display_components, current_options
             else:
                 return (
                     html.P(f"No display options available for {exp_type}", 
                           className="text-muted"),
-                    current_options
+                    current_options or {}
                 )
         
         # 5. 큐빗 선택 옵션 업데이트
@@ -306,6 +327,8 @@ class DashboardServer:
         )
         def update_qubit_options(current_data, experiments_data, current_qubits):
             """큐빗 선택 옵션 업데이트"""
+            print(f"[DEBUG] update_qubit_options - current_data: {current_data}")
+            
             if not current_data or not experiments_data:
                 return [], [], "No experiment selected"
             
@@ -337,18 +360,22 @@ class DashboardServer:
                 f"🔢 Qubits: {len(grid_locations)}"
             )
             
+            print(f"[DEBUG] Qubit options: {len(options)}, selected: {len(default_value)}")
+            
             return options, default_value, info
         
-        # 6. 메인 플롯 업데이트
+        # 6. 메인 플롯 업데이트 - 콜백 시그니처 수정
         @self.app.callback(
             Output('main-plot', 'figure'),
             [Input('qubit-selector', 'value'),
-             Input({'type': 'plot-option', 'index': ALL}, 'value'),
-             Input('current-experiment-data', 'data')],
-            [State('current-plot-options', 'data')]
+             Input('current-experiment-data', 'data'),
+             Input('current-plot-options', 'data')],
+            [State('experiments-store', 'data')]
         )
-        def update_main_plot(selected_qubits, option_values, current_data, stored_options):
+        def update_main_plot(selected_qubits, current_data, stored_options, experiments_store):
             """메인 플롯 업데이트"""
+            print(f"[DEBUG] update_main_plot - selected_qubits: {selected_qubits}, current_data: {current_data}")
+            
             if not current_data or not selected_qubits:
                 return self._create_empty_figure()
             
@@ -357,17 +384,34 @@ class DashboardServer:
             
             with self.lock:
                 if exp_id not in self.experiments:
+                    print(f"[DEBUG] Experiment {exp_id} not found in self.experiments")
                     return self._create_empty_figure()
                 
                 exp_data = self.experiments[exp_id]
             
             # 플롯 옵션 수집
-            plot_options = stored_options.get(exp_type, {})
+            plot_options = {}
+            if stored_options and exp_type in stored_options:
+                plot_options = stored_options[exp_type]
+            else:
+                # 기본 옵션 사용
+                if exp_type in self.plotters:
+                    plot_options = self.plotters[exp_type].get_default_options()
+            
+            print(f"[DEBUG] Plot options: {plot_options}")
             
             # 적절한 플로터로 플롯 생성
             if exp_type in self.plotters:
-                plotter = self.plotters[exp_type]
-                return plotter.create_plot(exp_data, selected_qubits, plot_options)
+                try:
+                    plotter = self.plotters[exp_type]
+                    fig = plotter.create_plot(exp_data, selected_qubits, plot_options)
+                    print(f"[DEBUG] Plot created successfully")
+                    return fig
+                except Exception as e:
+                    print(f"[ERROR] Failed to create plot: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    return self._create_error_figure(str(e))
             else:
                 return self._create_not_implemented_figure(exp_type)
     
@@ -392,6 +436,22 @@ class DashboardServer:
             x=0.5, y=0.5,
             showarrow=False,
             font=dict(size=20, color="gray")
+        )
+        fig.update_layout(
+            template="plotly_white",
+            height=600
+        )
+        return fig
+    
+    def _create_error_figure(self, error_msg: str) -> go.Figure:
+        """에러 figure 생성"""
+        fig = go.Figure()
+        fig.add_annotation(
+            text=f"Error: {error_msg}",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5,
+            showarrow=False,
+            font=dict(size=16, color="red")
         )
         fig.update_layout(
             template="plotly_white",
