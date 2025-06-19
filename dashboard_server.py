@@ -18,7 +18,7 @@ import dash_bootstrap_components as dbc
 
 # 로컬 모듈 임포트
 from data_handlers.file_watcher import ExperimentDataWatcher
-from data_handlers.data_loader import ExperimentDataLoader
+from HI_16Jun2025.calibration_dashboard.data_handlers.tof_data_loader import ExperimentDataLoader
 from utils.layout_components import LayoutComponents
 from watchdog.observers import Observer
 
@@ -129,7 +129,7 @@ class DashboardServer:
             dcc.Store(id='current-plot-options', storage_type='memory', data={}),
             
             # Interval 컴포넌트 (더 빠른 업데이트)
-            dcc.Interval(id='check-new-experiments', interval=3600000, disabled=False)
+            dcc.Interval(id='check-new-experiments', interval=2000, disabled=False)
         ], fluid=True)
     
     def _setup_callbacks(self):
@@ -180,7 +180,7 @@ class DashboardServer:
             else:
                 trigger = ctx.triggered[0]['prop_id'].split('.')[0]
             
-            # 새 실험 알림
+            # 새 실험 알림만 표시 (자동 로드 제거)
             if trigger == 'new-experiments-flag' and new_flag and new_flag.get('has_new'):
                 current_count = len(stored_experiments)
                 return (
@@ -191,8 +191,8 @@ class DashboardServer:
                     dash.no_update
                 )
             
-            # 리프레시 또는 초기 로드
-            if trigger in ['refresh-button', 'initial', 'new-experiments-flag']:
+            # 리프레시 버튼을 눌렀을 때만 로드
+            if trigger == 'refresh-button':
                 with self.lock:
                     # 실험 데이터 준비
                     experiments_data = {}
@@ -214,15 +214,8 @@ class DashboardServer:
                     print(f"[DEBUG] Prepared experiments_data: {len(experiments_data)} experiments")
                     
                     # 상태 메시지
-                    status_msg = ""
-                    show_alert = False
-                    if new_experiments and trigger == 'refresh-button':
-                        status_msg = f"✅ Loaded {len(new_experiments)} new experiment(s)"
-                        show_alert = True
-                    elif trigger == 'new-experiments-flag' and new_flag.get('has_new'):
-                        # 새 실험이 있을 때 자동으로 로드
-                        status_msg = f"✅ Auto-loaded {new_flag['count']} new experiment(s)"
-                        show_alert = True
+                    status_msg = f"✅ Loaded {len(new_experiments)} new experiment(s)" if new_experiments else "✅ Refreshed"
+                    show_alert = True
                     
                     update_time = f"Last updated: {datetime.now().strftime('%H:%M:%S')}"
                     
@@ -232,6 +225,28 @@ class DashboardServer:
                         show_alert,
                         str(len(self.experiments)),
                         update_time
+                    )
+            
+            # 초기 로드
+            if trigger == 'initial':
+                with self.lock:
+                    experiments_data = {}
+                    for exp_id in self.experiment_order:
+                        if exp_id in self.experiments:
+                            exp = self.experiments[exp_id]
+                            experiments_data[exp_id] = {
+                                'type': exp['type'],
+                                'timestamp': exp['timestamp'],
+                                'grid_locations': exp['qubit_info']['grid_locations'],
+                                'qubit_mapping': exp['qubit_info']['qubit_mapping']
+                            }
+                    
+                    return (
+                        experiments_data,
+                        "",
+                        False,
+                        str(len(self.experiments)),
+                        f"Last updated: {datetime.now().strftime('%H:%M:%S')}"
                     )
             
             return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
@@ -346,10 +361,9 @@ class DashboardServer:
              Output('qubit-selector', 'value'),
              Output('experiment-info', 'children')],
             [Input('current-experiment-data', 'data')],
-            [State('experiments-store', 'data'),
-             State('qubit-selector', 'value')]
+            [State('experiments-store', 'data')]
         )
-        def update_qubit_options(current_data, experiments_data, current_qubits):
+        def update_qubit_options(current_data, experiments_data):
             """큐빗 선택 옵션 업데이트"""
             print(f"[DEBUG] update_qubit_options - current_data: {current_data}")
             
@@ -369,12 +383,8 @@ class DashboardServer:
                 for loc in grid_locations
             ]
             
-            # 선택 값 결정
-            if current_qubits:
-                valid_qubits = [q for q in current_qubits if q in grid_locations]
-                default_value = valid_qubits if valid_qubits else grid_locations[:8]
-            else:
-                default_value = grid_locations[:8] if len(grid_locations) > 8 else grid_locations
+            # 새 실험을 선택했으므로 모든 큐빗을 기본으로 선택
+            default_value = grid_locations
             
             # 실험 정보 텍스트
             exp_type_display = exp_data['type'].replace('_', ' ').title()

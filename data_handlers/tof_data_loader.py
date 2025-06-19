@@ -1,13 +1,12 @@
 """
 Data Loader Module
-실험 데이터 파일을 로드하고 검증하는 모듈
+Time of Flight 실험 데이터 파일을 로드하고 검증하는 모듈
 """
 import json
 import xarray as xr
 from pathlib import Path
 from typing import Dict, Optional, Any, List
 from datetime import datetime
-
 
 class ExperimentDataLoader:
     """실험 데이터 로드 및 검증 클래스"""
