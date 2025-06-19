@@ -38,9 +38,9 @@ class TOFPlotter(ExperimentPlotter):
     def get_display_options(self) -> List[Any]:
         """TOF 전용 디스플레이 옵션"""
         return [
-            # 플롯 타입 선택
+            # 플롯 타입 선택 - ID를 단순하게 변경
             dbc.RadioItems(
-                id={'type': 'plot-option', 'index': 'plot-type'},
+                id='tof-plot-type',
                 options=[
                     {"label": "Averaged Run", "value": "averaged"},
                     {"label": "Single Run", "value": "single"},
@@ -63,7 +63,7 @@ class TOFPlotter(ExperimentPlotter):
                 dbc.Row([
                     dbc.Col([
                         dbc.Checklist(
-                            id={'type': 'plot-option', 'index': 'show-options'},
+                            id='tof-show-options',
                             options=[
                                 {"label": "Show TOF Line", "value": "show_tof"},
                                 {"label": "Show ADC Range", "value": "show_adc"},
@@ -79,7 +79,7 @@ class TOFPlotter(ExperimentPlotter):
                     dbc.Col([
                         dbc.Label("Max Columns:", className="me-2"),
                         dbc.Select(
-                            id={'type': 'plot-option', 'index': 'max-cols'},
+                            id='tof-max-cols',
                             options=[
                                 {"label": "1", "value": "1"},
                                 {"label": "2", "value": "2"},
@@ -93,7 +93,7 @@ class TOFPlotter(ExperimentPlotter):
                     dbc.Col([
                         dbc.Label("Height per subplot:", className="me-2"),
                         dbc.Input(
-                            id={'type': 'plot-option', 'index': 'subplot-height'},
+                            id='tof-subplot-height',
                             type="number",
                             value=300,
                             min=200,
@@ -110,10 +110,8 @@ class TOFPlotter(ExperimentPlotter):
         """기본 옵션"""
         return {
             'plot_type': 'averaged',
-            'show_tof': True,
-            'show_adc': True,
-            'auto_scale': True,
-            'max_cols': 2,
+            'show_options': ['show_tof', 'show_adc', 'auto_scale'],
+            'max_cols': '2',
             'subplot_height': 300
         }
     
@@ -122,12 +120,13 @@ class TOFPlotter(ExperimentPlotter):
         """TOF 플롯 생성"""
         # 옵션 추출
         plot_type = plot_options.get('plot_type', 'averaged')
-        show_tof = 'show_tof' in plot_options.get('show_options', ['show_tof'])
-        show_adc = 'show_adc' in plot_options.get('show_options', ['show_adc'])
-        auto_scale = 'auto_scale' in plot_options.get('show_options', ['auto_scale'])
+        show_options = plot_options.get('show_options', ['show_tof', 'show_adc', 'auto_scale'])
+        show_tof = 'show_tof' in show_options
+        show_adc = 'show_adc' in show_options
+        auto_scale = 'auto_scale' in show_options
         
         # 동적 레이아웃 설정
-        max_cols = int(plot_options.get('max_cols', 2))
+        max_cols = int(plot_options.get('max_cols', '2'))
         subplot_height = int(plot_options.get('subplot_height', 300))
         
         # 원래 설정 임시 변경

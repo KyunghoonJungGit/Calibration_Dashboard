@@ -242,28 +242,31 @@ class DashboardServer:
         def update_experiment_list(experiments_data, current_value, current_data):
             """실험 목록 업데이트"""
             print(f"[DEBUG] update_experiment_list - experiments_data: {experiments_data is not None}")
+            print(f"[DEBUG] self.experiment_order: {self.experiment_order}")
             
             if not experiments_data:
                 return [], None, None
             
             options = []
-            for exp_id in self.experiment_order:
-                if exp_id in experiments_data:
-                    exp = experiments_data[exp_id]
-                    # 실험 타입에 따른 아이콘 추가
-                    icon = self._get_experiment_icon(exp['type'])
-                    options.append({
-                        'label': f"{icon} {exp['type']} - {exp['timestamp']}",
-                        'value': exp_id
-                    })
+            # self.experiment_order를 사용하여 순서 유지
+            with self.lock:
+                for exp_id in self.experiment_order:
+                    if exp_id in experiments_data:
+                        exp = experiments_data[exp_id]
+                        # 실험 타입에 따른 아이콘 추가
+                        icon = self._get_experiment_icon(exp['type'])
+                        options.append({
+                            'label': f"{icon} {exp['type']} - {exp['timestamp']}",
+                            'value': exp_id
+                        })
             
-            print(f"[DEBUG] Generated {len(options)} options")
+            print(f"[DEBUG] Generated {len(options)} options from {len(self.experiment_order)} experiments")
             
             # 현재 선택 유지 또는 새로운 선택
             if current_value and current_value in experiments_data:
                 return options, current_value, current_data
-            elif self.experiment_order:
-                new_value = self.experiment_order[-1]
+            elif options:  # options가 있는지 확인
+                new_value = options[-1]['value']  # 마지막 옵션 선택
                 new_data = {
                     'exp_id': new_value,
                     'type': experiments_data[new_value]['type'],
@@ -364,7 +367,38 @@ class DashboardServer:
             
             return options, default_value, info
         
-        # 6. 메인 플롯 업데이트 - 콜백 시그니처 수정
+        # 6. TOF 특화 옵션 업데이트 콜백들 추가
+        @self.app.callback(
+            Output('current-plot-options', 'data', allow_duplicate=True),
+            [Input('tof-plot-type', 'value'),
+             Input('tof-show-options', 'value'),
+             Input('tof-max-cols', 'value'),
+             Input('tof-subplot-height', 'value')],
+            [State('current-experiment-data', 'data'),
+             State('current-plot-options', 'data')],
+            prevent_initial_call=True
+        )
+        def update_tof_options(plot_type, show_options, max_cols, subplot_height, 
+                             current_data, current_options):
+            """TOF 플롯 옵션 업데이트"""
+            if not current_data or current_data.get('type') != 'time_of_flight':
+                return current_options or {}
+            
+            if current_options is None:
+                current_options = {}
+            
+            # TOF 옵션 업데이트
+            current_options['time_of_flight'] = {
+                'plot_type': plot_type,
+                'show_options': show_options or [],
+                'max_cols': max_cols,
+                'subplot_height': subplot_height
+            }
+            
+            print(f"[DEBUG] Updated TOF options: {current_options['time_of_flight']}")
+            return current_options
+        
+        # 7. 메인 플롯 업데이트
         @self.app.callback(
             Output('main-plot', 'figure'),
             [Input('qubit-selector', 'value'),
