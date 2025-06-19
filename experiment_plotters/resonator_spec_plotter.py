@@ -2,7 +2,6 @@
 Resonator Spectroscopy Plotter Module
 Resonator Spectroscopy 실험 데이터 시각화를 위한 플로터
 """
-
 from typing import Dict, List, Any, Tuple
 import numpy as np
 import plotly.graph_objects as go
@@ -296,10 +295,10 @@ class ResonatorSpecPlotter(ExperimentPlotter):
             try:
                 # 피팅 파라미터 가져오기
                 qubit_fit = ds_fit.sel(qubit=qubit_name)
-                amplitude = float(qubit_fit.amplitude.values)
-                position = float(qubit_fit.position.values)
-                width = float(qubit_fit.width.values)
-                base_line = float(qubit_fit.base_line.mean().values)
+                amplitude = float(qubit_fit.amplitude.item())
+                position = float(qubit_fit.position.item())
+                width = float(qubit_fit.width.item())
+                base_line = float(qubit_fit.base_line.mean().item())
                 
                 # Lorentzian dip 계산
                 detuning = qubit_data.detuning.values

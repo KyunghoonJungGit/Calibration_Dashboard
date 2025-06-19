@@ -3,7 +3,6 @@ Resonator Spectroscopy Data Loader Module
 Load and validate Resonator Spectroscopy experiment data for Plotly Dash dashboard
 공진기 분광 실험 데이터를 로드하고 검증하는 모듈
 """
-
 import json
 import xarray as xr
 from pathlib import Path
@@ -111,12 +110,14 @@ class ResonatorSpecDataLoader:
             print(f"✓ Successfully loaded Resonator Spectroscopy data")
             print(f"  - {len(qubit_info['grid_locations'])} qubits")
             print(f"  - {len(ds_raw.full_freq)} frequency points")
-            print(f"  - Frequency range: {ds_raw.full_freq.min().values/1e9:.3f} - {ds_raw.full_freq.max().values/1e9:.3f} GHz")
+            print(f"  - Frequency range: {ds_raw.full_freq.min().item()/1e9:.3f} - {ds_raw.full_freq.max().item()/1e9:.3f} GHz")
             
             return experiment_data
             
         except Exception as e:
             print(f"❌ Error loading experiment from {experiment_dir}: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def _validate_required_files(self, experiment_dir: Path):
@@ -228,8 +229,9 @@ class ResonatorSpecDataLoader:
         # 주파수 범위 검증
         freq_info = experiment_data['metadata'].get('dataset_info', {}).get('frequency_range', {})
         if freq_info:
-            actual_min = float(ds_raw.full_freq.min().values)
-            actual_max = float(ds_raw.full_freq.max().values)
+            # .item()을 사용하여 스칼라 값으로 변환
+            actual_min = float(ds_raw.full_freq.min().item())
+            actual_max = float(ds_raw.full_freq.max().item())
             
             if abs(actual_min - freq_info.get('full_freq_min', actual_min)) > 1e3:  # 1kHz tolerance
                 print("⚠️  Warning: Frequency range mismatch in metadata")
@@ -243,8 +245,8 @@ class ResonatorSpecDataLoader:
                 if 'resonance_frequency_Hz' in qubit_analysis:
                     res_freq = qubit_analysis['resonance_frequency_Hz']
                     if res_freq:
-                        freq_min = float(ds_raw.full_freq.min().values)
-                        freq_max = float(ds_raw.full_freq.max().values)
+                        freq_min = float(ds_raw.full_freq.min().item())
+                        freq_max = float(ds_raw.full_freq.max().item())
                         
                         if not (freq_min <= res_freq <= freq_max):
                             print(f"⚠️  Warning: Resonance frequency for {grid_loc} "
@@ -257,9 +259,9 @@ class ResonatorSpecDataLoader:
         
         computed_info = {
             'frequency_info': {
-                'center_frequency_GHz': float(ds_raw.full_freq.mean().values) / 1e9,
-                'span_MHz': float(ds_raw.full_freq.max().values - ds_raw.full_freq.min().values) / 1e6,
-                'resolution_kHz': float(ds_raw.full_freq[1].values - ds_raw.full_freq[0].values) / 1e3
+                'center_frequency_GHz': float(ds_raw.full_freq.mean().item()) / 1e9,
+                'span_MHz': float((ds_raw.full_freq.max() - ds_raw.full_freq.min()).item()) / 1e6,
+                'resolution_kHz': float((ds_raw.full_freq[1] - ds_raw.full_freq[0]).item()) / 1e3
             }
         }
         
@@ -325,18 +327,18 @@ class ResonatorSpecDataLoader:
                 # Lorentzian dip 함수로 피팅 곡선 생성
                 fitted_curve = self._compute_lorentzian_dip(
                     ds_raw.detuning.values,
-                    float(fit_params.amplitude.values),
-                    float(fit_params.position.values),
-                    float(fit_params.width.values) / 2,
-                    float(fit_params.base_line.mean().values)
+                    float(fit_params.amplitude.item()),
+                    float(fit_params.position.item()),
+                    float(fit_params.width.item()) / 2,
+                    float(fit_params.base_line.mean().item())
                 )
                 
                 raw_data['fit'] = {
                     'curve': (fitted_curve / 1e-3).tolist(),  # mV 단위
-                    'amplitude': float(fit_params.amplitude.values),
-                    'position': float(fit_params.position.values),
-                    'width': float(fit_params.width.values),
-                    'base_line': float(fit_params.base_line.mean().values)
+                    'amplitude': float(fit_params.amplitude.item()),
+                    'position': float(fit_params.position.item()),
+                    'width': float(fit_params.width.item()),
+                    'base_line': float(fit_params.base_line.mean().item())
                 }
             
             # 분석 결과 추가
@@ -418,10 +420,10 @@ class ResonatorSpecDataLoader:
         }
         
         # 주파수 범위 비교
-        freq1_min = float(exp1['ds_raw'].full_freq.min().values)
-        freq1_max = float(exp1['ds_raw'].full_freq.max().values)
-        freq2_min = float(exp2['ds_raw'].full_freq.min().values)
-        freq2_max = float(exp2['ds_raw'].full_freq.max().values)
+        freq1_min = float(exp1['ds_raw'].full_freq.min().item())
+        freq1_max = float(exp1['ds_raw'].full_freq.max().item())
+        freq2_min = float(exp2['ds_raw'].full_freq.min().item())
+        freq2_max = float(exp2['ds_raw'].full_freq.max().item())
         
         if abs(freq1_min - freq2_min) > 1e6 or abs(freq1_max - freq2_max) > 1e6:  # 1MHz tolerance
             comparison['differences'].append('frequency_range')
