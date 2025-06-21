@@ -221,7 +221,9 @@ class ResonatorSpecPlotter(ExperimentPlotter):
             'fit': True
         }
         
-        # 분석 결과는 사용하지 않음 (기존 분석 함수 사용)
+        # 주파수가 2D인지 확인
+        freq_values = ds_raw.full_freq.values
+        is_2d_freq = freq_values.ndim == 2
         
         for idx, grid_location in enumerate(selected_qubits):
             col = (idx % cols) + 1
@@ -232,9 +234,16 @@ class ResonatorSpecPlotter(ExperimentPlotter):
                     {'ds_raw': ds_raw}, grid_location, qubit_info
                 )
                 
-                # 주파수 축 데이터
-                full_freq_GHz = ds_raw.full_freq.values / 1e9  # GHz 단위
-                detuning_MHz = ds_raw.detuning.values / 1e6    # MHz 단위
+                # 주파수 축 데이터 가져오기
+                if is_2d_freq:
+                    # 큐빗별로 다른 주파수를 가진 경우
+                    qubit_idx = qubit_info['qubit_mapping'][grid_location]['dataset_index']
+                    full_freq_GHz = freq_values[qubit_idx] / 1e9  # GHz 단위
+                    detuning_MHz = ds_raw.detuning.isel(qubit=qubit_idx).values / 1e6  # MHz 단위
+                else:
+                    # 모든 큐빗이 동일한 주파수를 가진 경우
+                    full_freq_GHz = freq_values / 1e9  # GHz 단위
+                    detuning_MHz = ds_raw.detuning.values / 1e6    # MHz 단위
                 
                 # Amplitude plot
                 if plot_type in ['amplitude', 'both']:
@@ -295,10 +304,12 @@ class ResonatorSpecPlotter(ExperimentPlotter):
             try:
                 # 피팅 파라미터 가져오기
                 qubit_fit = ds_fit.sel(qubit=qubit_name)
-                amplitude = float(qubit_fit.amplitude.item())
-                position = float(qubit_fit.position.item())
-                width = float(qubit_fit.width.item())
-                base_line = float(qubit_fit.base_line.mean().item())
+                
+                # 각 파라미터를 스칼라로 안전하게 변환
+                amplitude = self._safe_float_conversion(qubit_fit.amplitude.values)
+                position = self._safe_float_conversion(qubit_fit.position.values)
+                width = self._safe_float_conversion(qubit_fit.width.values)
+                base_line = float(qubit_fit.base_line.mean().values)
                 
                 # Lorentzian dip 계산
                 detuning = qubit_data.detuning.values
@@ -340,6 +351,8 @@ class ResonatorSpecPlotter(ExperimentPlotter):
                 
             except Exception as e:
                 print(f"Warning: Could not add fit for {qubit_name}: {e}")
+                import traceback
+                traceback.print_exc()
         
         # Y축 범위 설정
         if auto_scale:
@@ -403,6 +416,15 @@ class ResonatorSpecPlotter(ExperimentPlotter):
                 side="top",
                 row=row, col=col
             )
+    
+    def _safe_float_conversion(self, value):
+        """numpy 값을 안전하게 float로 변환"""
+        if hasattr(value, 'ndim'):
+            if value.ndim == 0:
+                return float(value)
+            else:
+                return float(value.item())
+        return float(value)
     
     def _compute_lorentzian_dip(self, x: np.ndarray, amplitude: float, 
                                position: float, hwhm: float, base_line: float) -> np.ndarray:

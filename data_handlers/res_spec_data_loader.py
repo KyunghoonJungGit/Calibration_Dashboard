@@ -107,10 +107,20 @@ class ResonatorSpecDataLoader:
             # 추가 분석 정보 계산 (필요시)
             experiment_data['computed_info'] = self._compute_additional_info(experiment_data)
             
-            print(f"✓ Successfully loaded Resonator Spectroscopy data")
-            print(f"  - {len(qubit_info['grid_locations'])} qubits")
-            print(f"  - {len(ds_raw.full_freq)} frequency points")
-            print(f"  - Frequency range: {ds_raw.full_freq.min().item()/1e9:.3f} - {ds_raw.full_freq.max().item()/1e9:.3f} GHz")
+            # 성공 메시지 출력
+            freq_values = ds_raw.full_freq.values
+            # 주파수가 2차원인 경우 (qubit별로 다른 주파수)
+            if freq_values.ndim == 2:
+                print(f"✓ Successfully loaded Resonator Spectroscopy data")
+                print(f"  - {len(qubit_info['grid_locations'])} qubits")
+                print(f"  - {freq_values.shape[1]} frequency points per qubit")
+                print(f"  - Frequency range (overall): {freq_values.min()/1e9:.3f} - {freq_values.max()/1e9:.3f} GHz")
+            else:
+                # 1차원인 경우 (모든 큐빗이 동일한 주파수)
+                print(f"✓ Successfully loaded Resonator Spectroscopy data")
+                print(f"  - {len(qubit_info['grid_locations'])} qubits")
+                print(f"  - {len(freq_values)} frequency points")
+                print(f"  - Frequency range: {freq_values.min()/1e9:.3f} - {freq_values.max()/1e9:.3f} GHz")
             
             return experiment_data
             
@@ -229,9 +239,10 @@ class ResonatorSpecDataLoader:
         # 주파수 범위 검증
         freq_info = experiment_data['metadata'].get('dataset_info', {}).get('frequency_range', {})
         if freq_info:
-            # .item()을 사용하여 스칼라 값으로 변환
-            actual_min = float(ds_raw.full_freq.min().item())
-            actual_max = float(ds_raw.full_freq.max().item())
+            # numpy 배열로 변환 후 min/max 계산
+            freq_values = ds_raw.full_freq.values
+            actual_min = float(np.min(freq_values))
+            actual_max = float(np.max(freq_values))
             
             if abs(actual_min - freq_info.get('full_freq_min', actual_min)) > 1e3:  # 1kHz tolerance
                 print("⚠️  Warning: Frequency range mismatch in metadata")
@@ -245,8 +256,16 @@ class ResonatorSpecDataLoader:
                 if 'resonance_frequency_Hz' in qubit_analysis:
                     res_freq = qubit_analysis['resonance_frequency_Hz']
                     if res_freq:
-                        freq_min = float(ds_raw.full_freq.min().item())
-                        freq_max = float(ds_raw.full_freq.max().item())
+                        freq_values = ds_raw.full_freq.values
+                        if freq_values.ndim == 2:
+                            # 큐빗별로 다른 주파수인 경우, 해당 큐빗의 주파수 범위 확인
+                            qubit_idx = qubit_info['grid_locations'].index(grid_loc)
+                            freq_min = float(freq_values[qubit_idx].min())
+                            freq_max = float(freq_values[qubit_idx].max())
+                        else:
+                            # 모든 큐빗이 동일한 주파수인 경우
+                            freq_min = float(freq_values.min())
+                            freq_max = float(freq_values.max())
                         
                         if not (freq_min <= res_freq <= freq_max):
                             print(f"⚠️  Warning: Resonance frequency for {grid_loc} "
@@ -257,11 +276,28 @@ class ResonatorSpecDataLoader:
         ds_raw = experiment_data['ds_raw']
         ds_fit = experiment_data['ds_fit']
         
+        # 주파수 데이터를 numpy 배열로 변환
+        freq_values = ds_raw.full_freq.values
+        
+        # 주파수가 2차원인 경우와 1차원인 경우를 구분하여 처리
+        if freq_values.ndim == 2:
+            # 각 큐빗마다 다른 주파수 범위를 가진 경우
+            # 전체 주파수 범위에서 계산
+            center_freq = float(np.mean(freq_values))
+            freq_span = float(np.max(freq_values) - np.min(freq_values))
+            # 첫 번째 큐빗의 resolution을 대표값으로 사용
+            freq_resolution = float(freq_values[0, 1] - freq_values[0, 0])
+        else:
+            # 모든 큐빗이 동일한 주파수 범위를 가진 경우
+            center_freq = float(freq_values.mean())
+            freq_span = float(freq_values.max() - freq_values.min())
+            freq_resolution = float(freq_values[1] - freq_values[0])
+        
         computed_info = {
             'frequency_info': {
-                'center_frequency_GHz': float(ds_raw.full_freq.mean().item()) / 1e9,
-                'span_MHz': float((ds_raw.full_freq.max() - ds_raw.full_freq.min()).item()) / 1e6,
-                'resolution_kHz': float((ds_raw.full_freq[1] - ds_raw.full_freq[0]).item()) / 1e3
+                'center_frequency_GHz': center_freq / 1e9,
+                'span_MHz': freq_span / 1e6,
+                'resolution_kHz': freq_resolution / 1e3
             }
         }
         
@@ -285,6 +321,19 @@ class ResonatorSpecDataLoader:
             
             computed_info['signal_quality'] = signal_quality
         
+        # 큐빗별 주파수 정보 추가 (2D 주파수인 경우)
+        if freq_values.ndim == 2:
+            per_qubit_freq_info = []
+            for q_idx in range(len(ds_raw.qubit)):
+                qubit_freqs = freq_values[q_idx]
+                per_qubit_freq_info.append({
+                    'qubit_idx': q_idx,
+                    'freq_min_GHz': float(qubit_freqs.min()) / 1e9,
+                    'freq_max_GHz': float(qubit_freqs.max()) / 1e9,
+                    'center_freq_GHz': float(qubit_freqs.mean()) / 1e9
+                })
+            computed_info['per_qubit_frequency_info'] = per_qubit_freq_info
+        
         return computed_info
     
     def get_plot_ready_data(self, experiment_data: Dict) -> Dict:
@@ -300,45 +349,70 @@ class ResonatorSpecDataLoader:
         ds_fit = experiment_data['ds_fit']
         qubit_info = experiment_data['qubit_info']
         
+        # full_freq가 2D인지 확인
+        freq_values = ds_raw.full_freq.values
+        is_2d_freq = freq_values.ndim == 2
+        
         plot_data = {
             'qubits': [],
-            'frequency_axis': {
+            'is_2d_frequency': is_2d_freq
+        }
+        
+        # 전체 주파수 축 정보 (1D인 경우만)
+        if not is_2d_freq:
+            plot_data['frequency_axis'] = {
                 'full_freq_GHz': (ds_raw.full_freq / 1e9).values.tolist(),
                 'detuning_MHz': (ds_raw.detuning / 1e6).values.tolist()
             }
-        }
         
         # 각 큐빗별 데이터 준비
         for idx, grid_loc in enumerate(qubit_info['grid_locations']):
             qubit_name = qubit_info['qubit_names'][idx]
             
+            # 큐빗별 데이터 선택
+            qubit_raw = ds_raw.isel(qubit=idx)
+            
             # Raw 데이터
             raw_data = {
                 'grid_location': grid_loc,
                 'qubit_name': qubit_name,
-                'phase': ds_raw.phase.isel(qubit=idx).values.tolist(),
-                'IQ_abs': (ds_raw.IQ_abs.isel(qubit=idx) / 1e-3).values.tolist(),  # mV 단위
+                'phase': qubit_raw.phase.values.tolist(),
+                'IQ_abs': (qubit_raw.IQ_abs / 1e-3).values.tolist(),  # mV 단위
             }
+            
+            # 2D 주파수인 경우 큐빗별 주파수 축 추가
+            if is_2d_freq:
+                raw_data['frequency_axis'] = {
+                    'full_freq_GHz': (qubit_raw.full_freq / 1e9).values.tolist(),
+                    'detuning_MHz': (qubit_raw.detuning / 1e6).values.tolist()
+                }
             
             # Fit 데이터
             if all(var in ds_fit.data_vars for var in ['amplitude', 'position', 'width', 'base_line']):
                 fit_params = ds_fit.isel(qubit=idx)
                 
+                # 각 파라미터를 스칼라로 안전하게 변환
+                amplitude_val = self._safe_float_conversion(fit_params.amplitude.values)
+                position_val = self._safe_float_conversion(fit_params.position.values)
+                width_val = self._safe_float_conversion(fit_params.width.values)
+                base_line_val = float(fit_params.base_line.mean().values)
+                
                 # Lorentzian dip 함수로 피팅 곡선 생성
+                detuning_values = qubit_raw.detuning.values
                 fitted_curve = self._compute_lorentzian_dip(
-                    ds_raw.detuning.values,
-                    float(fit_params.amplitude.item()),
-                    float(fit_params.position.item()),
-                    float(fit_params.width.item()) / 2,
-                    float(fit_params.base_line.mean().item())
+                    detuning_values,
+                    amplitude_val,
+                    position_val,
+                    width_val / 2,
+                    base_line_val
                 )
                 
                 raw_data['fit'] = {
                     'curve': (fitted_curve / 1e-3).tolist(),  # mV 단위
-                    'amplitude': float(fit_params.amplitude.item()),
-                    'position': float(fit_params.position.item()),
-                    'width': float(fit_params.width.item()),
-                    'base_line': float(fit_params.base_line.mean().item())
+                    'amplitude': amplitude_val,
+                    'position': position_val,
+                    'width': width_val,
+                    'base_line': base_line_val
                 }
             
             # 분석 결과 추가
@@ -356,6 +430,15 @@ class ResonatorSpecDataLoader:
         plot_data['grid_info'] = qubit_info.get('grid_shape', {})
         
         return plot_data
+    
+    def _safe_float_conversion(self, value):
+        """numpy 값을 안전하게 float로 변환"""
+        if hasattr(value, 'ndim'):
+            if value.ndim == 0:
+                return float(value)
+            else:
+                return float(value.item())
+        return float(value)
     
     def _compute_lorentzian_dip(self, x, amplitude, position, hwhm, base_line):
         """Lorentzian dip 함수 계산"""
@@ -419,11 +502,15 @@ class ResonatorSpecDataLoader:
             'differences': []
         }
         
-        # 주파수 범위 비교
-        freq1_min = float(exp1['ds_raw'].full_freq.min().item())
-        freq1_max = float(exp1['ds_raw'].full_freq.max().item())
-        freq2_min = float(exp2['ds_raw'].full_freq.min().item())
-        freq2_max = float(exp2['ds_raw'].full_freq.max().item())
+        # 주파수 범위 비교 - numpy 배열로 변환
+        freq1_values = exp1['ds_raw'].full_freq.values
+        freq2_values = exp2['ds_raw'].full_freq.values
+        
+        # 전체 범위로 비교 (2D든 1D든)
+        freq1_min = float(np.min(freq1_values))
+        freq1_max = float(np.max(freq1_values))
+        freq2_min = float(np.min(freq2_values))
+        freq2_max = float(np.max(freq2_values))
         
         if abs(freq1_min - freq2_min) > 1e6 or abs(freq1_max - freq2_max) > 1e6:  # 1MHz tolerance
             comparison['differences'].append('frequency_range')

@@ -691,11 +691,11 @@ if __name__ == "__main__":
         description='Calibration Dashboard Server',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
-  %(prog)s                    # Run with default settings
-  %(prog)s --port 8080       # Run on port 8080
-  %(prog)s --watch /data     # Monitor /data directory
-        """
+                Examples:
+                %(prog)s                   # Run with default settings
+                %(prog)s --port 8080       # Run on port 8080
+                %(prog)s --watch /data     # Monitor /data directory
+                """
     )
     
     parser.add_argument(
