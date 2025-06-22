@@ -39,20 +39,23 @@ class ExperimentDataWatcher(FileSystemEventHandler):
         if event.src_path.endswith(self.completion_marker):
             experiment_dir = Path(event.src_path).parent
             
-            with self.lock:
-                # 이미 처리 중이거나 처리된 경우 스킵
-                if experiment_dir in self.processing or experiment_dir in self.processed:
-                    return
+            # 날짜 폴더 내부에 있는지 확인
+            # 구조: dashboard_data/2025-06-17/#9_02a_resonator_spectroscopy_060916/.complete
+            if experiment_dir.parent.name.startswith('20'):  # 날짜 폴더인지 확인
+                with self.lock:
+                    # 이미 처리 중이거나 처리된 경우 스킵
+                    if experiment_dir in self.processing or experiment_dir in self.processed:
+                        return
+                    
+                    self.processing.add(experiment_dir)
                 
-                self.processing.add(experiment_dir)
-            
-            # 별도 스레드에서 처리
-            thread = threading.Thread(
-                target=self._process_experiment_folder,
-                args=(experiment_dir,),
-                daemon=True
-            )
-            thread.start()
+                # 별도 스레드에서 처리
+                thread = threading.Thread(
+                    target=self._process_experiment_folder,
+                    args=(experiment_dir,),
+                    daemon=True
+                )
+                thread.start()
     
     def on_modified(self, event):
         """파일 수정 감지 (일부 시스템에서는 created 대신 modified 이벤트 발생)"""

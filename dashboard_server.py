@@ -71,7 +71,7 @@ class DashboardServer:
     
     def _detect_experiment_type(self, experiment_dir: Path) -> Optional[str]:
         """
-        Detect experiment type from directory contents
+        Detect experiment type from directory name using keyword matching
         
         Parameters
         ----------
@@ -83,7 +83,43 @@ class DashboardServer:
         str or None
             Detected experiment type or None
         """
-        # First, check for metadata.json (old structure)
+        dir_name = experiment_dir.name.lower()
+        
+        # Keyword mapping to experiment types
+        # 키워드가 폴더명에 포함되어 있으면 해당 실험 타입으로 인식
+        keyword_mapping = {
+            'flight': 'time_of_flight',
+            'resonator': 'resonator_spectroscopy',
+            'qubit_spectroscopy': 'qubit_spectroscopy',
+            'ramsey': 'ramsey',
+            'rabi': 'rabi_amplitude',
+            'power': 'rabi_power',
+            't1': 't1',
+            't2': 't2',
+            'echo': 't2_echo',
+            'hello': 'hello_qua'
+        }
+        
+        # Check keywords in order (more specific first)
+        for keyword, exp_type in keyword_mapping.items():
+            if keyword in dir_name:
+                print(f"[DEBUG] Detected '{exp_type}' from keyword '{keyword}' in: {experiment_dir.name}")
+                return exp_type
+        
+        # If not found by keyword, check for data.json
+        data_json_path = experiment_dir / 'data.json'
+        if data_json_path.exists():
+            try:
+                with open(data_json_path, 'r') as f:
+                    data = json.load(f)
+                if 'experiment_type' in data:
+                    return data['experiment_type']
+                if 'metadata' in data and 'experiment_type' in data['metadata']:
+                    return data['metadata']['experiment_type']
+            except:
+                pass
+        
+        # Check for metadata.json (old structure)
         metadata_path = experiment_dir / 'metadata.json'
         if metadata_path.exists():
             try:
@@ -93,25 +129,9 @@ class DashboardServer:
             except:
                 pass
         
-        # Check for data.json (new structure)
-        data_json_path = experiment_dir / 'data.json'
-        if data_json_path.exists():
-            try:
-                with open(data_json_path, 'r') as f:
-                    data = json.load(f)
-                # Try to find experiment type in various locations
-                if 'experiment_type' in data:
-                    return data['experiment_type']
-                if 'metadata' in data and 'experiment_type' in data['metadata']:
-                    return data['metadata']['experiment_type']
-                # If not found, try to infer from data structure
-                # For now, if we have ds_raw.h5 and ds_fit.h5, assume it's TOF
-                if (experiment_dir / 'ds_raw.h5').exists() and (experiment_dir / 'ds_fit.h5').exists():
-                    return 'time_of_flight'
-            except:
-                pass
-        
-        return None
+        # If still not found, return unknown
+        print(f"[DEBUG] Could not detect experiment type for: {experiment_dir.name}")
+        return 'unknown'
     
     def initialize_dashboard(self):
         """Dash 앱 초기화"""
@@ -258,13 +278,27 @@ class DashboardServer:
                             exp_dir = self.experiments[exp_id]
                             exp_type = self._detect_experiment_type(exp_dir)
                             
-                            # Extract timestamp from directory name or use current time
+                            # Extract timestamp from parent directory (date) and experiment name
                             timestamp = "Unknown"
-                            if '_' in exp_id:
-                                # Try to extract timestamp from experiment ID
-                                parts = exp_id.split('_')
-                                if len(parts) >= 2:
-                                    timestamp = parts[-2] + '_' + parts[-1]
+                            try:
+                                # Get parent directory name (date folder)
+                                date_folder = exp_dir.parent.name  # e.g., "2025-06-17"
+                                exp_name = exp_dir.name  # e.g., "#14_01b_time_of_flight_mw_fem_084413"
+                                
+                                # Extract time from experiment name (last part)
+                                parts = exp_name.split('_')
+                                if parts:
+                                    time_part = parts[-1]  # e.g., "084413"
+                                    # Format: HHMMSS to HH:MM:SS
+                                    if len(time_part) == 6 and time_part.isdigit():
+                                        formatted_time = f"{time_part[:2]}:{time_part[2:4]}:{time_part[4:]}"
+                                        timestamp = f"{date_folder} {formatted_time}"
+                                    else:
+                                        timestamp = f"{date_folder} {time_part}"
+                                else:
+                                    timestamp = date_folder
+                            except:
+                                timestamp = "Unknown"
                             
                             experiments_data[exp_id] = {
                                 'type': exp_type or 'unknown',
@@ -316,8 +350,12 @@ class DashboardServer:
                         exp = experiments_data[exp_id]
                         # 실험 타입에 따른 아이콘 추가
                         icon = self._get_experiment_icon(exp['type'])
+                        # 전체 폴더명을 그대로 표시
+                        folder_name = exp_id.split('/')[-1] if '/' in exp_id else exp_id
+                        date_part = exp_id.split('/')[0] if '/' in exp_id else ''
+                        
                         options.append({
-                            'label': f"{icon} {exp['type']} - {exp['timestamp']}",
+                            'label': f"{icon} {folder_name} ({date_part})",
                             'value': exp_id
                         })
             
@@ -616,7 +654,14 @@ class DashboardServer:
     def add_experiment_from_directory(self, experiment_dir: Path):
         """디렉토리에서 실험 추가"""
         with self.lock:
-            exp_id = experiment_dir.name
+            # Create unique experiment ID including date
+            try:
+                date_folder = experiment_dir.parent.name
+                exp_name = experiment_dir.name
+                exp_id = f"{date_folder}/{exp_name}"
+            except:
+                exp_id = experiment_dir.name
+            
             if exp_id not in self.experiments:
                 self.experiments[exp_id] = experiment_dir
                 self.experiment_order.append(exp_id)
@@ -629,18 +674,28 @@ class DashboardServer:
                 print(f"   Total experiments: {len(self.experiments)}")
     
     def scan_existing_experiments(self, base_dir: Path):
-        """기존 실험 폴더 스캔"""
+        """기존 실험 폴더 스캔 - 날짜별 계층 구조 지원"""
         print(f"\n🔍 Scanning existing experiments in {base_dir}")
         
         experiment_dirs = []
-        for item in base_dir.iterdir():
-            if item.is_dir() and (item / ".complete").exists():
-                experiment_dirs.append(item)
+        
+        # 날짜 폴더들을 순회
+        for date_dir in base_dir.iterdir():
+            if date_dir.is_dir() and date_dir.name.startswith('20'):  # YYYY로 시작하는 폴더
+                print(f"📅 Scanning date folder: {date_dir.name}")
+                
+                # 각 날짜 폴더 내의 실험 폴더들을 확인
+                for exp_dir in date_dir.iterdir():
+                    if exp_dir.is_dir():
+                        # .complete 파일이 없어도 일단 추가 (데이터가 있으면)
+                        if (exp_dir / 'ds_raw.h5').exists() or (exp_dir / 'data.json').exists():
+                            experiment_dirs.append(exp_dir)
+                            print(f"  📁 Found experiment: {exp_dir.name}")
         
         # 타임스탬프 기준 정렬
         experiment_dirs.sort(key=lambda x: x.stat().st_mtime)
         
-        print(f"Found {len(experiment_dirs)} existing experiments")
+        print(f"\nTotal found: {len(experiment_dirs)} experiments")
         
         # 각 실험 추가
         loaded_count = 0
@@ -651,6 +706,8 @@ class DashboardServer:
                 loaded_count += 1
             except Exception as e:
                 print(f"⚠️  Error adding {exp_dir.name}: {e}")
+                import traceback
+                traceback.print_exc()
         
         print(f"✅ Successfully added: {loaded_count} experiments")
     
