@@ -1,9 +1,13 @@
 """
 Time of Flight Plotter Module
 Time of Flight 실험 데이터 시각화를 위한 플로터
+Integrated data loading following matplotlib code structure
 """
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any, Tuple, Optional
+from pathlib import Path
 import numpy as np
+import xarray as xr
+import json
 import plotly.graph_objects as go
 from dash import html, dcc
 import dash_bootstrap_components as dbc
@@ -12,15 +16,15 @@ from .base_plotter import ExperimentPlotter
 
 
 class TOFPlotter(ExperimentPlotter):
-    """Time of Flight 실험 플로터"""
+    """Time of Flight 실험 플로터 with integrated data loading"""
     
     def __init__(self):
         """TOF 플로터 초기화"""
         super().__init__()
         
         # TOF 특화 설정
-        self.adc_range = (-0.5, 0.5)  # ADC 범위 (V)
-        self.adc_full_range = (-0.6, 0.6)  # ADC 전체 표시 범위
+        self.adc_range = (-0.5, 0.5)  # ADC 범위 (mV)
+        self.adc_full_range = (-0.6, 0.6)  # ADC 전체 표시 범위 (mV)
         
         # 색상 설정
         self.trace_colors = {
@@ -34,6 +38,122 @@ class TOFPlotter(ExperimentPlotter):
     def experiment_type(self) -> str:
         """실험 타입"""
         return "time_of_flight"
+    
+    def load_experiment_data(self, experiment_dir: Path) -> Optional[Dict]:
+        """
+        Load TOF experiment data from directory
+        Following the matplotlib code structure
+        
+        Parameters
+        ----------
+        experiment_dir : Path
+            Directory containing experiment data files
+            
+        Returns
+        -------
+        Dict or None
+            Loaded experiment data or None if failed
+        """
+        try:
+            print(f"\n=== Loading TOF data from {experiment_dir} ===")
+            
+            # File paths
+            ds_raw_path = experiment_dir / "ds_raw.h5"
+            ds_fit_path = experiment_dir / "ds_fit.h5"
+            data_json_path = experiment_dir / "data.json"
+            node_json_path = experiment_dir / "node.json"
+            
+            # Check if all required files exist
+            required_files = [ds_raw_path, ds_fit_path, data_json_path, node_json_path]
+            missing_files = [f for f in required_files if not f.exists()]
+            if missing_files:
+                raise FileNotFoundError(f"Missing required files: {[f.name for f in missing_files]}")
+            
+            # Load xarray datasets
+            ds_raw = xr.open_dataset(ds_raw_path)
+            ds_fit = xr.open_dataset(ds_fit_path)
+            
+            # Load JSON files
+            with open(data_json_path, 'r') as f:
+                data_json = json.load(f)
+            
+            with open(node_json_path, 'r') as f:
+                node_json = json.load(f)
+            
+            # Extract qubit information
+            qubits = ds_raw['qubit'].values
+            n_qubits = len(qubits)
+            print(f"Number of qubits: {n_qubits}")
+            print(f"Qubits: {qubits}")
+            
+            # Extract fitting success information
+            success = ds_fit['success'].values
+            print(f"Fitting success for each qubit: {success}")
+            
+            # Create qubit info structure compatible with dashboard
+            grid_locations = []
+            qubit_names = []
+            qubit_mapping = {}
+            
+            for idx, qubit in enumerate(qubits):
+                # Extract grid location from qubit name (e.g., "q0-7" -> "0,7")
+                if isinstance(qubit, str) and '-' in qubit:
+                    parts = qubit.replace('q', '').split('-')
+                    grid_loc = f"{parts[0]},{parts[1]}"
+                else:
+                    # Fallback
+                    grid_loc = f"0,{idx}"
+                
+                grid_locations.append(grid_loc)
+                qubit_names.append(str(qubit))
+                
+                qubit_mapping[grid_loc] = {
+                    "dataset_index": idx,
+                    "qubit_name": str(qubit),
+                    "grid_location": grid_loc
+                }
+            
+            qubit_info = {
+                "grid_locations": grid_locations,
+                "qubit_names": qubit_names,
+                "qubit_mapping": qubit_mapping,
+                "dataset_qubit_dim": "qubit"
+            }
+            
+            # Extract metadata
+            metadata = {
+                "experiment_id": experiment_dir.name,
+                "experiment_type": "time_of_flight"
+            }
+            
+            # Add timestamp if available in data.json
+            if 'timestamp' in data_json:
+                metadata['timestamp'] = data_json['timestamp']
+            elif 'metadata' in data_json and 'timestamp' in data_json['metadata']:
+                metadata['timestamp'] = data_json['metadata']['timestamp']
+            else:
+                metadata['timestamp'] = "Unknown"
+            
+            # Compile experiment data
+            experiment_data = {
+                'type': 'time_of_flight',
+                'ds_raw': ds_raw,
+                'ds_fit': ds_fit,
+                'data_json': data_json,
+                'node_json': node_json,
+                'qubit_info': qubit_info,
+                'metadata': metadata,
+                'timestamp': metadata['timestamp']
+            }
+            
+            print(f"✓ Successfully loaded TOF data")
+            return experiment_data
+            
+        except Exception as e:
+            print(f"❌ Error loading TOF experiment from {experiment_dir}: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
     
     def get_display_options(self) -> List[Any]:
         """TOF 전용 디스플레이 옵션"""
@@ -66,7 +186,7 @@ class TOFPlotter(ExperimentPlotter):
                         {"label": "Show ADC Range", "value": "show_adc"},
                         {"label": "Auto-scale Y-axis", "value": "auto_scale"}
                     ],
-                    value=["show_tof", "show_adc", "auto_scale"],
+                    value=["show_tof", "show_adc"],
                     className="mb-3",
                     labelStyle={'display': 'block', 'margin-bottom': '5px'}
                 )
@@ -87,7 +207,7 @@ class TOFPlotter(ExperimentPlotter):
                                 {"label": "3", "value": "3"},
                                 {"label": "4", "value": "4"}
                             ],
-                            value="2",
+                            value="4",
                             style={"width": "100%"}
                         )
                     ], width=6),
@@ -111,8 +231,8 @@ class TOFPlotter(ExperimentPlotter):
         """기본 옵션"""
         return {
             'plot_type': 'averaged',
-            'show_options': ['show_tof', 'show_adc', 'auto_scale'],
-            'max_cols': '2',
+            'show_options': ['show_tof', 'show_adc'],
+            'max_cols': '4',
             'subplot_height': 300
         }
     
@@ -121,13 +241,13 @@ class TOFPlotter(ExperimentPlotter):
         """TOF 플롯 생성"""
         # 옵션 추출
         plot_type = plot_options.get('plot_type', 'averaged')
-        show_options = plot_options.get('show_options', ['show_tof', 'show_adc', 'auto_scale'])
+        show_options = plot_options.get('show_options', ['show_tof', 'show_adc'])
         show_tof = 'show_tof' in show_options
         show_adc = 'show_adc' in show_options
         auto_scale = 'auto_scale' in show_options
         
         # 동적 레이아웃 설정
-        max_cols = int(plot_options.get('max_cols', '2'))
+        max_cols = int(plot_options.get('max_cols', '4'))
         subplot_height = int(plot_options.get('subplot_height', 300))
         
         # 원래 설정 임시 변경
@@ -163,7 +283,7 @@ class TOFPlotter(ExperimentPlotter):
             
             # 축 레이블 업데이트
             fig.update_xaxes(title_text="Time [ns]")
-            fig.update_yaxes(title_text="Amplitude [mV]")
+            fig.update_yaxes(title_text="Readout amplitude [mV]")
             
             # 서브플롯 타이틀 위치 조정
             self.update_subplot_titles_position(fig, subplot_titles)
@@ -210,10 +330,11 @@ class TOFPlotter(ExperimentPlotter):
             col = (idx % cols) + 1
             
             try:
-                # 큐빗 데이터 가져오기
-                qubit_data, qubit_name = self.get_qubit_data(
-                    {'ds_raw': ds_raw}, grid_location, qubit_info
-                )
+                # Get qubit name from grid location
+                qubit_name = qubit_info['qubit_mapping'][grid_location]['qubit_name']
+                
+                # Get data for this qubit
+                qubit_data = ds_raw.sel(qubit=qubit_name)
                 
                 # 시간 축
                 time = qubit_data.readout_time.values
@@ -244,6 +365,8 @@ class TOFPlotter(ExperimentPlotter):
                     
             except Exception as e:
                 print(f"Error plotting {grid_location}: {e}")
+                import traceback
+                traceback.print_exc()
                 continue
     
     def _get_delay_value(self, ds_fit: Any, qubit_name: str) -> float:
@@ -262,11 +385,15 @@ class TOFPlotter(ExperimentPlotter):
                           show_legends: Dict, show_tof: bool, 
                           show_adc: bool, auto_scale: bool):
         """Averaged 데이터 플롯 추가"""
+        # Convert to mV
+        adcI_mV = qubit_data.adcI.values * 1e3
+        adcQ_mV = qubit_data.adcQ.values * 1e3
+        
         # I quadrature
         fig.add_trace(
             go.Scatter(
                 x=time,
-                y=qubit_data.adcI.values,
+                y=adcI_mV,
                 name='I' if show_legends['I'] else None,
                 line=dict(color=self.trace_colors['I'], width=2),
                 showlegend=show_legends['I'],
@@ -280,7 +407,7 @@ class TOFPlotter(ExperimentPlotter):
         fig.add_trace(
             go.Scatter(
                 x=time,
-                y=qubit_data.adcQ.values,
+                y=adcQ_mV,
                 name='Q' if show_legends['Q'] else None,
                 line=dict(color=self.trace_colors['Q'], width=2),
                 showlegend=show_legends['Q'],
@@ -312,27 +439,36 @@ class TOFPlotter(ExperimentPlotter):
                 line_width=0,
                 row=row, col=col
             )
+            
+            # Add ADC Range text
+            fig.add_annotation(
+                text="ADC Range",
+                x=time[0] + (time[-1] - time[0]) * 0.02,
+                y=self.adc_range[1] * 0.9,
+                xref=f"x{col}" if row == 1 else f"x{col + (row-1)*cols}",
+                yref=f"y{col}" if row == 1 else f"y{col + (row-1)*cols}",
+                showarrow=False,
+                font=dict(size=8, color="gray")
+            )
         
         # Y축 범위 설정
         if auto_scale:
-            y_data = np.concatenate([
-                qubit_data.adcI.values,
-                qubit_data.adcQ.values
-            ])
+            y_data = np.concatenate([adcI_mV, adcQ_mV])
             y_min, y_max = self.calculate_y_range(y_data)
         else:
             y_min, y_max = self.adc_full_range
         
         fig.update_yaxes(range=[y_min, y_max], row=row, col=col)
+        fig.update_xaxes(range=[0, 1000], row=row, col=col)
     
     def _add_single_run_plot(self, fig: go.Figure, qubit_data: Any, time: Any,
                            delay_value: float, row: int, col: int,
                            show_legends: Dict, plot_type: str,
                            show_tof: bool, show_adc: bool, auto_scale: bool):
         """Single run 데이터 플롯 추가"""
-        # Single run 데이터
-        single_i = qubit_data.adc_single_runI.values
-        single_q = qubit_data.adc_single_runQ.values
+        # Single run 데이터 (mV로 변환)
+        single_i = qubit_data.adc_single_runI.values * 1e3
+        single_q = qubit_data.adc_single_runQ.values * 1e3
         
         # I trace
         show_i_legend = show_legends['I_single'] and plot_type == 'single'
@@ -380,7 +516,7 @@ class TOFPlotter(ExperimentPlotter):
             fig.add_shape(
                 type="rect",
                 x0=time[0], x1=time[-1],
-                y0=self.adc_range[0], y1=self.adc_range[1],
+                y0=self.adc_range[0] * 6, y1=self.adc_range[1] * 6,  # Larger range for single run
                 fillcolor="gray",
                 opacity=0.2,
                 layer="below",
@@ -393,14 +529,14 @@ class TOFPlotter(ExperimentPlotter):
             y_data_single = np.concatenate([single_i, single_q])
             y_min_single, y_max_single = np.min(y_data_single), np.max(y_data_single)
             
-            # ADC 범위와 비교하여 적절한 범위 선택
+            # 신호가 작으면 데이터에 맞춤
             if y_max_single < 0.1 and y_min_single > -0.1:
-                # 신호가 작으면 데이터에 맞춤
                 y_min, y_max = self.calculate_y_range(y_data_single)
             else:
-                # 신호가 크면 ADC 전체 범위 표시
-                y_min, y_max = self.adc_full_range
+                # 신호가 크면 고정 범위
+                y_min, y_max = -3, 3
         else:
-            y_min, y_max = self.adc_full_range
+            y_min, y_max = -3, 3  # Larger range for single run data
         
         fig.update_yaxes(range=[y_min, y_max], row=row, col=col)
+        fig.update_xaxes(range=[0, 1000], row=row, col=col)

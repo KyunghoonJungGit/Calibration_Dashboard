@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
 Calibration Dashboard Server - Main Server Module
-실험 데이터 시각화를 위한 메인 대시보드 서버
+Modified to integrate data loading directly into plotters
 """
 
 import os
@@ -19,25 +19,23 @@ import dash_bootstrap_components as dbc
 
 # 로컬 모듈 임포트
 from data_handlers.file_watcher import ExperimentDataWatcher
-from data_handlers.universal_data_loader import UniversalDataLoader
 from utils.layout_components import LayoutComponents
 
 from watchdog.observers import Observer
 
 
 class DashboardServer:
-    """모듈화된 캘리브레이션 대시보드 서버"""
+    """모듈화된 캘리브레이션 대시보드 서버 with integrated data loading"""
     
     def __init__(self, port: int = 8091):
         self.port = port
         self.app = None
-        self.experiments = {}  # {experiment_id: experiment_data}
+        self.experiments = {}  # {experiment_id: experiment_dir_path}
         self.experiment_order = []  # 실험 순서
         self.lock = threading.Lock()
         
         # 컴포넌트 초기화
         self.layout_components = LayoutComponents()
-        self.data_loader = UniversalDataLoader()  # 범용 로더 사용
         
         # 플로터 레지스트리 (동적 로딩)
         self.plotters = {}
@@ -55,19 +53,65 @@ class DashboardServer:
             self.plotters[tof_plotter.experiment_type] = tof_plotter
             print(f"✓ Registered plotter: {tof_plotter.experiment_type}")
             
-            # Resonator Spec 플로터 등록
-            from experiment_plotters.resonator_spec_plotter import ResonatorSpecPlotter
-            res_spec_plotter = ResonatorSpecPlotter()
-            self.plotters[res_spec_plotter.experiment_type] = res_spec_plotter
-            print(f"✓ Registered plotter: {res_spec_plotter.experiment_type}")
-            
-            # 추후 다른 플로터들 추가
-            # from experiment_plotters.qubit_spec_plotter import QubitSpecPlotter
-            # from experiment_plotters.rabi_plotter import RabiPlotter
-            # from experiment_plotters.ramsey_plotter import RamseyPlotter
+            # Resonator Spec 플로터 등록 (if it has load_experiment_data method)
+            try:
+                from experiment_plotters.resonator_spec_plotter import ResonatorSpecPlotter
+                res_spec_plotter = ResonatorSpecPlotter()
+                # Check if it has the new data loading method
+                if hasattr(res_spec_plotter, 'load_experiment_data'):
+                    self.plotters[res_spec_plotter.experiment_type] = res_spec_plotter
+                    print(f"✓ Registered plotter: {res_spec_plotter.experiment_type}")
+                else:
+                    print(f"⚠️ ResonatorSpecPlotter doesn't have load_experiment_data method yet")
+            except Exception as e:
+                print(f"⚠️ Could not register ResonatorSpecPlotter: {e}")
             
         except ImportError as e:
             print(f"⚠️ Error importing plotters: {e}")
+    
+    def _detect_experiment_type(self, experiment_dir: Path) -> Optional[str]:
+        """
+        Detect experiment type from directory contents
+        
+        Parameters
+        ----------
+        experiment_dir : Path
+            Directory containing experiment files
+            
+        Returns
+        -------
+        str or None
+            Detected experiment type or None
+        """
+        # First, check for metadata.json (old structure)
+        metadata_path = experiment_dir / 'metadata.json'
+        if metadata_path.exists():
+            try:
+                with open(metadata_path, 'r') as f:
+                    metadata = json.load(f)
+                return metadata.get('experiment_type')
+            except:
+                pass
+        
+        # Check for data.json (new structure)
+        data_json_path = experiment_dir / 'data.json'
+        if data_json_path.exists():
+            try:
+                with open(data_json_path, 'r') as f:
+                    data = json.load(f)
+                # Try to find experiment type in various locations
+                if 'experiment_type' in data:
+                    return data['experiment_type']
+                if 'metadata' in data and 'experiment_type' in data['metadata']:
+                    return data['metadata']['experiment_type']
+                # If not found, try to infer from data structure
+                # For now, if we have ds_raw.h5 and ds_fit.h5, assume it's TOF
+                if (experiment_dir / 'ds_raw.h5').exists() and (experiment_dir / 'ds_fit.h5').exists():
+                    return 'time_of_flight'
+            except:
+                pass
+        
+        return None
     
     def initialize_dashboard(self):
         """Dash 앱 초기화"""
@@ -188,7 +232,7 @@ class DashboardServer:
             else:
                 trigger = ctx.triggered[0]['prop_id'].split('.')[0]
             
-            # 새 실험 알림만 표시 (자동 로드 제거)
+            # 새 실험 알림만 표시
             if trigger == 'new-experiments-flag' and new_flag and new_flag.get('has_new'):
                 current_count = len(stored_experiments)
                 return (
@@ -200,7 +244,7 @@ class DashboardServer:
                 )
             
             # 리프레시 버튼을 눌렀을 때만 로드
-            if trigger == 'refresh-button':
+            if trigger == 'refresh-button' or trigger == 'initial':
                 with self.lock:
                     # 실험 데이터 준비
                     experiments_data = {}
@@ -211,19 +255,32 @@ class DashboardServer:
                             new_experiments.append(exp_id)
                         
                         if exp_id in self.experiments:
-                            exp = self.experiments[exp_id]
+                            exp_dir = self.experiments[exp_id]
+                            exp_type = self._detect_experiment_type(exp_dir)
+                            
+                            # Extract timestamp from directory name or use current time
+                            timestamp = "Unknown"
+                            if '_' in exp_id:
+                                # Try to extract timestamp from experiment ID
+                                parts = exp_id.split('_')
+                                if len(parts) >= 2:
+                                    timestamp = parts[-2] + '_' + parts[-1]
+                            
                             experiments_data[exp_id] = {
-                                'type': exp['type'],
-                                'timestamp': exp['timestamp'],
-                                'grid_locations': exp['qubit_info']['grid_locations'],
-                                'qubit_mapping': exp['qubit_info']['qubit_mapping']
+                                'type': exp_type or 'unknown',
+                                'timestamp': timestamp,
+                                'exp_dir': str(exp_dir)
                             }
                     
                     print(f"[DEBUG] Prepared experiments_data: {len(experiments_data)} experiments")
                     
                     # 상태 메시지
-                    status_msg = f"✅ Loaded {len(new_experiments)} new experiment(s)" if new_experiments else "✅ Refreshed"
-                    show_alert = True
+                    if trigger == 'refresh-button':
+                        status_msg = f"✅ Loaded {len(new_experiments)} new experiment(s)" if new_experiments else "✅ Refreshed"
+                        show_alert = True
+                    else:
+                        status_msg = ""
+                        show_alert = False
                     
                     update_time = f"Last updated: {datetime.now().strftime('%H:%M:%S')}"
                     
@@ -233,28 +290,6 @@ class DashboardServer:
                         show_alert,
                         str(len(self.experiments)),
                         update_time
-                    )
-            
-            # 초기 로드
-            if trigger == 'initial':
-                with self.lock:
-                    experiments_data = {}
-                    for exp_id in self.experiment_order:
-                        if exp_id in self.experiments:
-                            exp = self.experiments[exp_id]
-                            experiments_data[exp_id] = {
-                                'type': exp['type'],
-                                'timestamp': exp['timestamp'],
-                                'grid_locations': exp['qubit_info']['grid_locations'],
-                                'qubit_mapping': exp['qubit_info']['qubit_mapping']
-                            }
-                    
-                    return (
-                        experiments_data,
-                        "",
-                        False,
-                        str(len(self.experiments)),
-                        f"Last updated: {datetime.now().strftime('%H:%M:%S')}"
                     )
             
             return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
@@ -269,7 +304,6 @@ class DashboardServer:
         def update_experiment_list(experiments_data, current_value):
             """실험 목록 업데이트"""
             print(f"[DEBUG] update_experiment_list - experiments_data: {experiments_data is not None}")
-            print(f"[DEBUG] self.experiment_order: {self.experiment_order}")
             
             if not experiments_data:
                 return [], None
@@ -292,14 +326,14 @@ class DashboardServer:
             # 현재 선택 유지 또는 새로운 선택
             if current_value and current_value in experiments_data:
                 return options, current_value
-            elif options:  # options가 있는지 확인
-                new_value = options[-1]['value']  # 마지막 옵션 선택
+            elif options:
+                new_value = options[-1]['value']
                 print(f"[DEBUG] Selected new experiment: {new_value}")
                 return options, new_value
             
             return options, None
         
-        # 3-1. 실험 선택 시 current-experiment-data 업데이트 (새로운 콜백)
+        # 3-1. 실험 선택 시 current-experiment-data 업데이트
         @self.app.callback(
             Output('current-experiment-data', 'data'),
             [Input('experiment-selector', 'value')],
@@ -313,12 +347,35 @@ class DashboardServer:
                 return None
             
             exp = experiments_data[selected_value]
+            
+            # Load experiment data using the appropriate plotter
+            exp_type = exp['type']
+            exp_dir = Path(exp['exp_dir'])
+            
+            if exp_type in self.plotters:
+                plotter = self.plotters[exp_type]
+                if hasattr(plotter, 'load_experiment_data'):
+                    print(f"[DEBUG] Loading data using {exp_type} plotter")
+                    exp_data = plotter.load_experiment_data(exp_dir)
+                    if exp_data:
+                        # Store loaded data for use in plotting
+                        current_data = {
+                            'exp_id': selected_value,
+                            'type': exp_type,
+                            'timestamp': exp['timestamp'],
+                            'loaded_data': exp_data
+                        }
+                        print(f"[DEBUG] Successfully loaded experiment data")
+                        return current_data
+            
+            # Fallback if plotter doesn't support loading
             current_data = {
                 'exp_id': selected_value,
                 'type': exp['type'],
-                'timestamp': exp['timestamp']
+                'timestamp': exp['timestamp'],
+                'exp_dir': exp['exp_dir']
             }
-            print(f"[DEBUG] Updated current experiment data: {current_data}")
+            print(f"[DEBUG] Using basic experiment info (no data loaded)")
             return current_data
         
         # 4. 디스플레이 옵션 동적 업데이트
@@ -368,45 +425,46 @@ class DashboardServer:
             [Output('qubit-selector', 'options'),
              Output('qubit-selector', 'value'),
              Output('experiment-info', 'children')],
-            [Input('current-experiment-data', 'data')],
-            [State('experiments-store', 'data')]
+            [Input('current-experiment-data', 'data')]
         )
-        def update_qubit_options(current_data, experiments_data):
+        def update_qubit_options(current_data):
             """큐빗 선택 옵션 업데이트"""
             print(f"[DEBUG] update_qubit_options - current_data: {current_data}")
             
-            if not current_data or not experiments_data:
+            if not current_data:
                 return [], [], "No experiment selected"
             
-            exp_id = current_data['exp_id']
-            if exp_id not in experiments_data:
-                return [], [], "Experiment data not found"
-            
-            exp_data = experiments_data[exp_id]
-            
-            # 큐빗 옵션 생성
-            grid_locations = exp_data['grid_locations']
-            options = [
-                {'label': f"Qubit {loc}", 'value': loc} 
-                for loc in grid_locations
-            ]
-            
-            # 새 실험을 선택했으므로 모든 큐빗을 기본으로 선택
-            default_value = grid_locations
-            
-            # 실험 정보 텍스트
-            exp_type_display = exp_data['type'].replace('_', ' ').title()
-            info = (
-                f"📊 Type: {exp_type_display} | "
-                f"🕐 Time: {exp_data['timestamp']} | "
-                f"🔢 Qubits: {len(grid_locations)}"
-            )
-            
-            print(f"[DEBUG] Qubit options: {len(options)}, selected: {len(default_value)}")
-            
-            return options, default_value, info
+            # Check if we have loaded data
+            if 'loaded_data' in current_data and current_data['loaded_data']:
+                exp_data = current_data['loaded_data']
+                qubit_info = exp_data.get('qubit_info', {})
+                grid_locations = qubit_info.get('grid_locations', [])
+                
+                # 큐빗 옵션 생성
+                options = [
+                    {'label': f"Qubit {loc}", 'value': loc} 
+                    for loc in grid_locations
+                ]
+                
+                # 모든 큐빗을 기본으로 선택
+                default_value = grid_locations
+                
+                # 실험 정보 텍스트
+                exp_type_display = current_data['type'].replace('_', ' ').title()
+                info = (
+                    f"📊 Type: {exp_type_display} | "
+                    f"🕐 Time: {current_data['timestamp']} | "
+                    f"🔢 Qubits: {len(grid_locations)}"
+                )
+                
+                print(f"[DEBUG] Qubit options: {len(options)}, selected: {len(default_value)}")
+                
+                return options, default_value, info
+            else:
+                # No loaded data
+                return [], [], f"No qubit data available for {current_data.get('type', 'unknown')} experiment"
         
-        # 6. TOF 특화 옵션 업데이트 콜백들 추가
+        # 6. TOF 특화 옵션 업데이트 콜백들
         @self.app.callback(
             Output('current-plot-options', 'data', allow_duplicate=True),
             [Input({'type': 'tof-option', 'index': ALL}, 'value')],
@@ -430,42 +488,11 @@ class DashboardServer:
             current_options['time_of_flight'] = {
                 'plot_type': option_values[0] if option_values[0] else 'averaged',
                 'show_options': option_values[1] if option_values[1] else [],
-                'max_cols': option_values[2] if option_values[2] else '2',
+                'max_cols': option_values[2] if option_values[2] else '4',
                 'subplot_height': option_values[3] if option_values[3] else 300
             }
             
             print(f"[DEBUG] Updated TOF options: {current_options['time_of_flight']}")
-            return current_options
-        
-        # 6-1. Resonator Spec 특화 옵션 업데이트 콜백
-        @self.app.callback(
-            Output('current-plot-options', 'data', allow_duplicate=True),
-            [Input({'type': 'res-spec-option', 'index': ALL}, 'value')],
-            [State('current-experiment-data', 'data'),
-             State('current-plot-options', 'data')],
-            prevent_initial_call=True
-        )
-        def update_res_spec_options(option_values, current_data, current_options):
-            """Resonator Spec 플롯 옵션 업데이트"""
-            if not current_data or current_data.get('type') != 'resonator_spectroscopy':
-                return current_options or {}
-            
-            if current_options is None:
-                current_options = {}
-            
-            # 빈 값들이 들어올 수 있으므로 방어적으로 처리
-            if not option_values or len(option_values) < 4:
-                return current_options
-            
-            # Resonator Spec 옵션 업데이트
-            current_options['resonator_spectroscopy'] = {
-                'plot_type': option_values[0] if option_values[0] else 'amplitude',
-                'show_options': option_values[1] if option_values[1] else [],
-                'max_cols': option_values[2] if option_values[2] else '2',
-                'subplot_height': option_values[3] if option_values[3] else 350
-            }
-            
-            print(f"[DEBUG] Updated Resonator Spec options: {current_options['resonator_spectroscopy']}")
             return current_options
         
         # 7. 메인 플롯 업데이트
@@ -482,15 +509,13 @@ class DashboardServer:
             if not current_data or not selected_qubits:
                 return self._create_empty_figure()
             
-            exp_id = current_data['exp_id']
             exp_type = current_data['type']
             
-            with self.lock:
-                if exp_id not in self.experiments:
-                    print(f"[DEBUG] Experiment {exp_id} not found in self.experiments")
-                    return self._create_empty_figure()
-                
-                exp_data = self.experiments[exp_id]
+            # Check if we have loaded data
+            if 'loaded_data' not in current_data or not current_data['loaded_data']:
+                return self._create_error_figure("No data loaded for this experiment")
+            
+            exp_data = current_data['loaded_data']
             
             # 플롯 옵션 수집
             plot_options = {}
@@ -588,20 +613,19 @@ class DashboardServer:
         )
         return fig
     
-    def add_experiment_from_file(self, experiment_data: Dict, experiment_id: str):
-        """파일에서 로드한 실험 데이터 추가"""
+    def add_experiment_from_directory(self, experiment_dir: Path):
+        """디렉토리에서 실험 추가"""
         with self.lock:
-            if experiment_id not in self.experiments:
-                self.experiments[experiment_id] = experiment_data
-                self.experiment_order.append(experiment_id)
+            exp_id = experiment_dir.name
+            if exp_id not in self.experiments:
+                self.experiments[exp_id] = experiment_dir
+                self.experiment_order.append(exp_id)
                 
-                # 실험 타입 통계
-                exp_type = experiment_data['type']
-                type_count = sum(1 for exp in self.experiments.values() 
-                               if exp['type'] == exp_type)
+                # 실험 타입 감지
+                exp_type = self._detect_experiment_type(experiment_dir)
                 
-                print(f"📊 Added to dashboard: {experiment_id}")
-                print(f"   Type: {exp_type} (Total: {type_count})")
+                print(f"📊 Added to dashboard: {exp_id}")
+                print(f"   Type: {exp_type or 'unknown'}")
                 print(f"   Total experiments: {len(self.experiments)}")
     
     def scan_existing_experiments(self, base_dir: Path):
@@ -618,34 +642,17 @@ class DashboardServer:
         
         print(f"Found {len(experiment_dirs)} existing experiments")
         
-        # 각 실험 로드
+        # 각 실험 추가
         loaded_count = 0
-        failed_count = 0
         
         for exp_dir in experiment_dirs:
             try:
-                # 범용 데이터 로더 사용
-                experiment_data = self.data_loader.load_experiment(exp_dir)
-                
-                if experiment_data:
-                    self.add_experiment_from_file(
-                        experiment_data,
-                        experiment_data['metadata']['experiment_id']
-                    )
-                    loaded_count += 1
-                
+                self.add_experiment_from_directory(exp_dir)
+                loaded_count += 1
             except Exception as e:
-                print(f"⚠️  Error loading {exp_dir.name}: {e}")
-                failed_count += 1
+                print(f"⚠️  Error adding {exp_dir.name}: {e}")
         
-        print(f"✅ Successfully loaded: {loaded_count}")
-        if failed_count > 0:
-            print(f"❌ Failed to load: {failed_count}")
-        
-        # 지원하는 실험 타입 출력
-        print(f"\n📋 Supported experiment types:")
-        for exp_type in self.data_loader.get_supported_experiments():
-            print(f"   • {exp_type}")
+        print(f"✅ Successfully added: {loaded_count} experiments")
     
     def run(self, watch_dir: str = "./dashboard_data"):
         """대시보드 서버 실행"""
@@ -658,8 +665,8 @@ class DashboardServer:
         # 기존 실험 스캔
         self.scan_existing_experiments(watch_path)
         
-        # 파일 감시 시작 - 범용 로더를 전달
-        event_handler = ExperimentDataWatcher(self, self.data_loader)
+        # 파일 감시 시작 - Modified watcher
+        event_handler = ModifiedExperimentDataWatcher(self)
         observer = Observer()
         observer.schedule(event_handler, str(watch_path), recursive=True)
         observer.start()
@@ -682,6 +689,65 @@ class DashboardServer:
             observer.stop()
             observer.join()
             print("✅ Server stopped")
+
+
+class ModifiedExperimentDataWatcher(ExperimentDataWatcher):
+    """Modified file watcher that just tracks directories"""
+    
+    def __init__(self, dashboard_server):
+        """Initialize without data loader"""
+        self.dashboard_server = dashboard_server
+        self.processing = set()
+        self.processed = set()
+        self.lock = threading.Lock()
+        
+        # 설정
+        self.completion_marker = '.complete'
+        self.processing_delay = 0.5
+    
+    def on_created(self, event):
+        """새 파일/폴더 생성 감지"""
+        if event.is_directory:
+            return
+        
+        # 완료 마커 파일 확인
+        if event.src_path.endswith(self.completion_marker):
+            experiment_dir = Path(event.src_path).parent
+            
+            with self.lock:
+                # 이미 처리 중이거나 처리된 경우 스킵
+                if experiment_dir in self.processing or experiment_dir in self.processed:
+                    return
+                
+                self.processing.add(experiment_dir)
+            
+            # 별도 스레드에서 처리
+            thread = threading.Thread(
+                target=self._process_experiment_folder,
+                args=(experiment_dir,),
+                daemon=True
+            )
+            thread.start()
+    
+    def _process_experiment_folder(self, experiment_dir: Path):
+        """실험 폴더를 처리하여 대시보드에 추가"""
+        print(f"\n📁 Processing new experiment: {experiment_dir.name}")
+        
+        # 파일 쓰기 완료 대기
+        import time
+        time.sleep(self.processing_delay)
+        
+        try:
+            # Simply add the directory to dashboard
+            self.dashboard_server.add_experiment_from_directory(experiment_dir)
+            print(f"✅ Successfully added: {experiment_dir.name}")
+        except Exception as e:
+            print(f"❌ Failed to add {experiment_dir.name}: {e}")
+        finally:
+            # 처리 완료 후 상태 업데이트
+            with self.lock:
+                self.processing.discard(experiment_dir)
+                self.processed.add(experiment_dir)
 
 
 if __name__ == "__main__":
